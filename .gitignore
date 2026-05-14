@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Generated / runtime
+*.log
+.env
+graphify-out/
+wiki/graphify-out/
+raw/
+
+# Cache
+.hermes/
