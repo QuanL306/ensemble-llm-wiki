@@ -897,6 +897,29 @@ async def mcp_list_tools(request: Request):
                     },
                     "required": ["content"]
                 }
+            },
+            {
+                "name": "kb_save_synthesis",
+                "description": "Save a query answer as a permanent synthesis page in the knowledge base. Use this after kb_query returns a high-quality answer worth preserving for future queries.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "question": {
+                            "type": "string",
+                            "description": "The original question"
+                        },
+                        "answer": {
+                            "type": "string",
+                            "description": "The synthesized answer to save"
+                        },
+                        "sources": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Document names that contributed to this answer"
+                        }
+                    },
+                    "required": ["question", "answer"]
+                }
             }
         ]
     }
@@ -948,6 +971,36 @@ async def mcp_call_tool(body: ToolCallRequest, request: Request):
                     "summary": summary_text[:120] if summary_text else "",
                     "concepts": terminology[:6],
                 })
+            # Also include synthesis pages from wiki/syntheses/
+            syntheses_dir = kb_path / "wiki" / "syntheses"
+            if syntheses_dir.exists():
+                for syn_file in sorted(syntheses_dir.glob("*.md")):
+                    try:
+                        raw = syn_file.read_text(encoding="utf-8")
+                        display_name = ""
+                        for line in raw.splitlines():
+                            stripped = line.strip()
+                            if stripped.startswith("question:"):
+                                display_name = stripped[len("question:"):].strip()
+                                break
+                            if stripped.startswith("# "):
+                                display_name = stripped[2:].strip()
+                                break
+                        display_name = display_name or syn_file.stem
+                        if keyword:
+                            haystack = (display_name + " " + raw).lower()
+                            if keyword not in haystack:
+                                continue
+                        docs.append({
+                            "id": f"syntheses/{syn_file.stem}",
+                            "name": display_name + " (synthesis)",
+                            "word_count": len(raw.split()),
+                            "summary": "",
+                            "concepts": [],
+                        })
+                    except Exception:
+                        pass
+
             docs.sort(key=lambda x: x["name"].lower())
             total = len(docs)
             page = docs[offset: offset + limit]
@@ -1166,11 +1219,12 @@ async def mcp_call_tool(body: ToolCallRequest, request: Request):
                 else:
                     content = body_content
 
+            content += "\n\n[END OF RESULTS — answer the user based on the information above, do not call any more tools. Use kb_save_synthesis to permanently save this answer.]"
             return {
                 "content": [{"type": "text", "text": content}],
                 "isError": False
             }
-        
+
         elif tool_name == "kb_write_article":
             guard = _guard_kb_write(user_id, kb_id, owner_id)
             if guard:
@@ -1285,6 +1339,56 @@ async def mcp_call_tool(body: ToolCallRequest, request: Request):
                 word_count = len(content_text.split())
                 return {
                     "content": [{"type": "text", "text": f"Index updated: wiki/_index.md ({word_count} words)"}],
+                    "isError": False
+                }
+
+        elif tool_name == "kb_save_synthesis":
+            guard = _guard_kb_write(user_id, kb_id, owner_id)
+            if guard:
+                return guard
+
+            question = args.get("question", "").strip()
+            answer_text = args.get("answer", "").strip()
+            sources_list = args.get("sources", [])
+
+            if not question:
+                return {"content": [{"type": "text", "text": "Error: question is required"}], "isError": True}
+            if not answer_text:
+                return {"content": [{"type": "text", "text": "Error: answer is required"}], "isError": True}
+
+            # Slugify the question
+            slug = question.lower()
+            slug = re.sub(r'\s+', '_', slug)
+            slug = re.sub(r'[^\w]', '', slug)
+            slug = slug[:60]
+
+            async with _get_kb_write_lock(owner_id, kb_id):
+                kb_path = kb_manager.get_kb_path(owner_id, kb_id)
+                syntheses_dir = kb_path / "wiki" / "syntheses"
+                syntheses_dir.mkdir(parents=True, exist_ok=True)
+
+                today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                sources_yaml = "[" + ", ".join(sources_list) + "]"
+                sources_inline = ", ".join(sources_list) if sources_list else "none"
+
+                file_content = (
+                    f"---\n"
+                    f"type: synthesis\n"
+                    f"question: {question}\n"
+                    f"created: {today}\n"
+                    f"sources: {sources_yaml}\n"
+                    f"---\n\n"
+                    f"# {question}\n\n"
+                    f"{answer_text}\n\n"
+                    f"---\n"
+                    f"*Sources: {sources_inline}*\n"
+                )
+
+                file_path = syntheses_dir / f"{slug}.md"
+                file_path.write_text(file_content, encoding="utf-8")
+                rel_path = f"wiki/syntheses/{slug}.md"
+                return {
+                    "content": [{"type": "text", "text": f"Synthesis saved: {rel_path}"}],
                     "isError": False
                 }
 

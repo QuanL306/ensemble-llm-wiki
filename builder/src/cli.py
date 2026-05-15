@@ -348,6 +348,54 @@ def cmd_fetch_list(args):
         print()
 
 
+def cmd_harvest(args):
+    """Harvest AI session transcripts into the KB."""
+    kb_path = get_kb_path()
+
+    if not kb_path:
+        print("❌ Error: Knowledge base config not found (.kbaconfig)")
+        print("   Please run: python src/cli.py init <folder_path>")
+        return
+
+    from core.transcript_harvester import TranscriptHarvester
+
+    harvester = TranscriptHarvester(kb_path)
+
+    if args.list:
+        sessions = harvester.list_harvested()
+        if not sessions:
+            print("No sessions harvested yet.")
+            print("Use: python src/cli.py harvest")
+            return
+        print(f"📋 Harvested sessions ({len(sessions)}):\n")
+        for s in sessions:
+            print(f"  📄 {s['slug']}")
+            print(f"      source:     {s.get('source', '?')}")
+            print(f"      harvested:  {s.get('harvested_at', '?')}")
+            print(f"      exchanges:  {s.get('message_count', '?')}")
+            print()
+        return
+
+    sources = [s.strip() for s in args.sources.split(",") if s.strip()]
+    since_days = args.since
+
+    print(f"📼 Harvesting transcripts from: {', '.join(sources)}")
+    if since_days:
+        print(f"   Filter: sessions from last {since_days} day(s)")
+
+    result = harvester.harvest(sources=sources, since_days=since_days)
+
+    print(f"\n✅ Harvest complete!")
+    print(f"   New sessions:     {result['new']}")
+    print(f"   Already ingested: {result['skipped']}")
+    if result['errors']:
+        print(f"   Errors:           {result['errors']}")
+
+    if result['new'] > 0:
+        print(f"\n💡 Next step: python src/cli.py ingest")
+        print(f"   Transcripts written to: raw/transcripts/")
+
+
 # ============================================================
 # LLM-driven compilation
 # ============================================================
@@ -2032,6 +2080,31 @@ Examples:
     )
 
     # ------------------------------------------------------------------
+    # harvest: import AI session transcripts
+    # ------------------------------------------------------------------
+    harvest_parser = subparsers.add_parser(
+        'harvest',
+        help='Import AI session transcripts into KB',
+        description=(
+            'Read Claude Code (and optionally Cursor) session transcripts '
+            'and write them as structured Markdown files into raw/transcripts/, '
+            'ready for the normal ingest → compile pipeline.'
+        ),
+    )
+    harvest_parser.add_argument(
+        '--sources', default='claude-code',
+        help='Adapters to use: claude-code,cursor (default: claude-code)'
+    )
+    harvest_parser.add_argument(
+        '--since', type=int, metavar='DAYS',
+        help='Only harvest sessions from the last N days'
+    )
+    harvest_parser.add_argument(
+        '--list', action='store_true',
+        help='List previously harvested sessions'
+    )
+
+    # ------------------------------------------------------------------
     # compile-llm: LLM-driven wiki compilation
     # ------------------------------------------------------------------
     compile_llm_parser = subparsers.add_parser(
@@ -2213,6 +2286,7 @@ Examples:
         'status': cmd_status,
         'fetch': cmd_fetch,
         'fetch-list': cmd_fetch_list,
+        'harvest': cmd_harvest,
         'deploy': cmd_deploy,
         'lint': cmd_lint,
         'search': cmd_search,

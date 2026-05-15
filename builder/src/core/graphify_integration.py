@@ -210,6 +210,136 @@ def split_edges(graph_file: Path, output_dir: Path):
     )
 
 
+def tag_edge_provenance(graph_file: Path, articles_dir: Path) -> dict:
+    """
+    Classify each edge in graph.json as EXTRACTED, INFERRED, or AMBIGUOUS.
+
+    EXTRACTED  — a [[wikilink]] in a source article explicitly names the target
+    AMBIGUOUS  — edge weight below threshold (0.3) suggesting low LLM confidence
+    INFERRED   — everything else (LLM-generated semantic relationship)
+
+    Writes graph_provenance.json alongside graph.json and returns counts.
+    """
+    import re
+
+    counts = {"extracted": 0, "inferred": 0, "ambiguous": 0, "total": 0}
+
+    if not graph_file.exists():
+        print(f"⚠️ {graph_file} not found, skipping provenance tagging", file=sys.stderr)
+        return counts
+
+    try:
+        with open(graph_file) as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"⚠️ Could not read {graph_file}: {e}", file=sys.stderr)
+        return counts
+
+    nodes = data.get("nodes", [])
+    links = data.get("links", [])
+
+    def _normalize(name: str) -> str:
+        return name.lower().strip().replace("_", " ")
+
+    # Build normalized node label → node id lookup
+    norm_to_id: dict[str, str] = {}
+    for node in nodes:
+        nid = node.get("id", "")
+        label = node.get("label", nid)
+        norm_to_id[_normalize(label)] = nid
+
+    # Scan markdown files to build extracted pairs set
+    extracted_pairs: set[tuple[str, str]] = set()
+    wikilink_re = re.compile(r'\[\[([^\]]+)\]\]')
+
+    if articles_dir.exists():
+        for md_file in articles_dir.rglob("*.md"):
+            try:
+                text = md_file.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            # Find all wikilinks in this file
+            wikilinks = {_normalize(m) for m in wikilink_re.findall(text)}
+            if not wikilinks:
+                continue
+            # Determine which node this file represents (match by filename stem)
+            file_norm = _normalize(md_file.stem)
+            src_id = norm_to_id.get(file_norm)
+            if src_id is None:
+                continue
+            # For each wikilink that matches a known node, record the pair
+            for wl_norm in wikilinks:
+                tgt_id = norm_to_id.get(wl_norm)
+                if tgt_id is not None:
+                    extracted_pairs.add((_normalize(src_id), _normalize(tgt_id)))
+                    extracted_pairs.add((file_norm, wl_norm))
+
+    # Tag each link
+    tagged_links = []
+    for link in links:
+        # Handle both from/to and source/target conventions
+        src = link.get("source") or link.get("from", "")
+        tgt = link.get("target") or link.get("to", "")
+        # Handle both weight and value fields
+        raw_weight = link.get("weight") or link.get("value")
+
+        src_norm = _normalize(str(src))
+        tgt_norm = _normalize(str(tgt))
+
+        tagged = dict(link)
+        if (src_norm, tgt_norm) in extracted_pairs:
+            tagged["provenance"] = "EXTRACTED"
+            counts["extracted"] += 1
+        elif raw_weight is not None:
+            try:
+                if float(raw_weight) < 0.3:
+                    tagged["provenance"] = "AMBIGUOUS"
+                    counts["ambiguous"] += 1
+                else:
+                    tagged["provenance"] = "INFERRED"
+                    counts["inferred"] += 1
+            except (ValueError, TypeError):
+                tagged["provenance"] = "INFERRED"
+                counts["inferred"] += 1
+        else:
+            tagged["provenance"] = "INFERRED"
+            counts["inferred"] += 1
+
+        tagged_links.append(tagged)
+
+    counts["total"] = len(tagged_links)
+
+    # Write graph_provenance.json
+    provenance_data = dict(data)
+    provenance_data["links"] = tagged_links
+    provenance_file = graph_file.parent / "graph_provenance.json"
+    with open(provenance_file, "w") as f:
+        json.dump(provenance_data, f, indent=2, ensure_ascii=False)
+
+    # Write edges_tagged.jsonl (tagged edges.jsonl counterpart)
+    edges_tagged_file = graph_file.parent / "edges_tagged.jsonl"
+    node_map = {n["id"]: n for n in nodes if "id" in n}
+    with open(edges_tagged_file, "w") as f:
+        for link in tagged_links:
+            src = link.get("source") or link.get("from", "")
+            tgt = link.get("target") or link.get("to", "")
+            row = {
+                "source": src,
+                "source_label": node_map[src]["label"] if src in node_map else src,
+                "target": tgt,
+                "target_label": node_map[tgt]["label"] if tgt in node_map else tgt,
+                "relation": link.get("relation", ""),
+                "confidence": link.get("confidence", ""),
+                "confidence_score": link.get("confidence_score", 0),
+                "source_file": link.get("source_file", ""),
+                "provenance": link["provenance"],
+            }
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+    print(f"✅ Provenance: {provenance_file.name} + {edges_tagged_file.name}")
+    return counts
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Skill Seekers → Graphify automated pipeline"
@@ -220,6 +350,8 @@ def main():
     parser.add_argument("--watch", action="store_true", help="Watch mode (rebuild on file change)")
     parser.add_argument("--jsonld", action="store_true", default=False, help="Generate JSON-LD export")
     parser.add_argument("--no-jsonld", dest="jsonld", action="store_false", help="Skip JSON-LD export")
+    parser.add_argument("--no-provenance", dest="provenance", action="store_false",
+                        default=True, help="Skip edge provenance tagging")
     
     args = parser.parse_args()
     input_dir = Path(args.input).resolve()
@@ -291,6 +423,14 @@ def main():
                         input_dir / "graphify-out" / "graph.json",
                         input_dir / "graphify-out",
                     )
+                if args.provenance:
+                    articles_dir = input_dir / "wiki" / "_articles"
+                    if articles_dir.exists():
+                        counts = tag_edge_provenance(
+                            input_dir / "graphify-out" / "graph.json",
+                            articles_dir,
+                        )
+                        print(f"   Provenance: {counts['extracted']} extracted · {counts['inferred']} inferred · {counts['ambiguous']} ambiguous")
                 pending_changes = False
         except KeyboardInterrupt:
             print("\n👋 Watch mode stopped")
@@ -302,7 +442,16 @@ def main():
             jsonld_file = input_dir / "graphify-out" / "graph.jsonld"
             generate_jsonld(graph_json, jsonld_file, args.project)
             split_edges(graph_json, input_dir / "graphify-out")
-        
+
+        if success and args.provenance:
+            articles_dir = input_dir / "wiki" / "_articles"
+            if articles_dir.exists():
+                counts = tag_edge_provenance(
+                    input_dir / "graphify-out" / "graph.json",
+                    articles_dir,
+                )
+                print(f"   Provenance: {counts['extracted']} extracted · {counts['inferred']} inferred · {counts['ambiguous']} ambiguous")
+
         if success:
             print(f"\n✅ Pipeline complete!")
             print(f"   Graph: {input_dir}/graphify-out/graph.html")

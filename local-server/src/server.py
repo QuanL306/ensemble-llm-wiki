@@ -455,6 +455,33 @@ class KnowledgeBaseMCPServer:
                         "required": ["doc_id"],
                     },
                 ),
+                Tool(
+                    name="kb_save_synthesis",
+                    description=(
+                        "Save a query answer as a permanent synthesis page in the knowledge base. "
+                        "Use this after kb_query returns a high-quality answer worth preserving for future queries."
+                    ),
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "question": {
+                                "type": "string",
+                                "description": "The original question",
+                            },
+                            "answer": {
+                                "type": "string",
+                                "description": "The synthesized answer to save",
+                            },
+                            "sources": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Document names that contributed to this answer",
+                            },
+                            **self._kb_name_param(),
+                        },
+                        "required": ["question", "answer"],
+                    },
+                ),
             ]
 
         @server.call_tool()
@@ -469,6 +496,8 @@ class KnowledgeBaseMCPServer:
                 return await self._tool_search(arguments)
             elif name == "kb_get_document":
                 return await self._tool_get_document(arguments)
+            elif name == "kb_save_synthesis":
+                return await self._tool_save_synthesis(arguments)
             else:
                 raise ValueError(f"Unknown tool: {name}")
 
@@ -520,6 +549,40 @@ class KnowledgeBaseMCPServer:
                 "lifecycle": lc.get("state", "draft"),
                 "contradictions": bool(file_info.get("_has_contradictions")),
             })
+
+        # Also include synthesis pages from wiki/syntheses/
+        syntheses_dir = kb_path / "wiki" / "syntheses"
+        if syntheses_dir.exists():
+            for syn_file in sorted(syntheses_dir.glob("*.md")):
+                try:
+                    first_line = ""
+                    raw = syn_file.read_text(encoding="utf-8")
+                    for line in raw.splitlines():
+                        stripped = line.strip()
+                        if stripped.startswith("question:"):
+                            first_line = stripped[len("question:"):].strip()
+                            break
+                        if stripped.startswith("# "):
+                            first_line = stripped[2:].strip()
+                            break
+                    display_name = first_line or syn_file.stem
+                    if keyword:
+                        haystack = (display_name + " " + raw).lower()
+                        if keyword not in haystack:
+                            continue
+                    docs.append({
+                        "id": f"syntheses/{syn_file.stem}",
+                        "name": display_name + " (synthesis)",
+                        "word_count": len(raw.split()),
+                        "summary": "",
+                        "concepts": [],
+                        "confidence": "",
+                        "confidence_score": None,
+                        "lifecycle": "synthesis",
+                        "contradictions": False,
+                    })
+                except Exception:
+                    pass
 
         docs.sort(key=lambda x: x["name"].lower())
         total = len(docs)
@@ -627,6 +690,51 @@ class KnowledgeBaseMCPServer:
                     "lifecycle": lc.get("state", "draft"),
                 })
 
+        # Also search synthesis files by direct scan
+        syntheses_dir = kb_path / "wiki" / "syntheses"
+        if syntheses_dir.exists():
+            for syn_file in sorted(syntheses_dir.glob("*.md")):
+                try:
+                    raw = syn_file.read_text(encoding="utf-8")
+                    question_line = ""
+                    for line in raw.splitlines():
+                        stripped = line.strip()
+                        if stripped.startswith("question:"):
+                            question_line = stripped[len("question:"):].strip()
+                            break
+                        if stripped.startswith("# "):
+                            question_line = stripped[2:].strip()
+                            break
+                    # Build a minimal file_info-like dict for scoring
+                    syn_info = {
+                        "name": question_line or syn_file.stem,
+                        "extracted_metadata": {
+                            "core_claims": [question_line] if question_line else [],
+                            "word_count": len(raw.split()),
+                        },
+                        "llm_metadata": {
+                            "summary": raw[:600],
+                            "terminology": keywords,
+                        },
+                        "status": "completed",
+                    }
+                    score, best_chunk_title = _scoring.score_hybrid(
+                        syn_info, keywords, idf, concepts_data, None, None
+                    )
+                    if score > 0:
+                        results.append({
+                            "id": f"syntheses/{syn_file.stem}",
+                            "name": (question_line or syn_file.stem) + " (synthesis)",
+                            "score": round(score, 1),
+                            "word_count": len(raw.split()),
+                            "core_claims": [question_line] if question_line else [],
+                            "best_chunk": None,
+                            "confidence": "",
+                            "lifecycle": "synthesis",
+                        })
+                except Exception:
+                    pass
+
         results.sort(key=lambda x: x["score"], reverse=True)
         total = len(results)
         results = results[offset: offset + limit]
@@ -694,6 +802,51 @@ class KnowledgeBaseMCPServer:
             return [TextContent(type="text", text=f"Section '{section}' not found in document.")]
 
         return [TextContent(type="text", text=content + "\n\n[END OF DOCUMENT — present the content to the user, do not call any more tools]")]
+
+    async def _tool_save_synthesis(self, arguments: dict) -> List[TextContent]:
+        question = arguments.get("question", "").strip()
+        answer = arguments.get("answer", "").strip()
+        sources = arguments.get("sources", [])
+        kb_name = arguments.get("kb_name")
+        kb_path = self._resolve_kb(kb_name)
+
+        if not question:
+            return [TextContent(type="text", text="Error: question is required")]
+        if not answer:
+            return [TextContent(type="text", text="Error: answer is required")]
+
+        # Slugify the question
+        slug = question.lower()
+        slug = re.sub(r'\s+', '_', slug)
+        slug = re.sub(r'[^\w]', '', slug)
+        slug = slug[:60]
+
+        syntheses_dir = kb_path / "wiki" / "syntheses"
+        syntheses_dir.mkdir(parents=True, exist_ok=True)
+
+        today = datetime.now().strftime("%Y-%m-%d")
+        sources_list = sources if sources else []
+        sources_yaml = "[" + ", ".join(sources_list) + "]"
+        sources_inline = ", ".join(sources_list) if sources_list else "none"
+
+        content = (
+            f"---\n"
+            f"type: synthesis\n"
+            f"question: {question}\n"
+            f"created: {today}\n"
+            f"sources: {sources_yaml}\n"
+            f"---\n\n"
+            f"# {question}\n\n"
+            f"{answer}\n\n"
+            f"---\n"
+            f"*Sources: {sources_inline}*\n"
+        )
+
+        file_path = syntheses_dir / f"{slug}.md"
+        file_path.write_text(content, encoding="utf-8")
+
+        rel_path = f"wiki/syntheses/{slug}.md"
+        return [TextContent(type="text", text=f"Synthesis saved: {rel_path}")]
 
     async def _tool_query(self, arguments: dict) -> List[TextContent]:
         question = arguments.get("question", "")
@@ -838,7 +991,7 @@ class KnowledgeBaseMCPServer:
             full_text = body_text
 
         # Explicit stop signal for AI assistants
-        full_text += "\n\n[END OF RESULTS — answer the user based on the information above, do not call any more tools]"
+        full_text += "\n\n[END OF RESULTS — answer the user based on the information above, do not call any more tools. Use kb_save_synthesis to permanently save this answer.]"
 
         return [TextContent(type="text", text=full_text)]
 
