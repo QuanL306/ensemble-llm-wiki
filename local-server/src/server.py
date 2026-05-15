@@ -78,8 +78,7 @@ class KnowledgeBaseMCPServer:
         self._embed_model = None
 
         # LLM client (shared across all KBs)
-        self._llm_client = None
-        self._llm_provider = None
+        self._llm_backend = None
         self._llm_config = None
 
         # Rewrite/synthesis caches (OrderedDict for O(1) LRU eviction)
@@ -126,17 +125,21 @@ class KnowledgeBaseMCPServer:
     # ── LLM ──────────────────────────────────────────────────────────────
 
     def _get_llm(self):
-        if self._llm_client is None:
+        if self._llm_backend is None:
             src = os.path.join(
                 os.path.dirname(os.path.dirname(os.path.dirname(
                     os.path.abspath(__file__)))), "builder", "src"
             )
             if src not in sys.path:
                 sys.path.insert(0, src)
-            from utils.llm_client import get_llm_config, create_client
-            self._llm_config = get_llm_config()
-            self._llm_client, self._llm_provider = create_client(self._llm_config)
-        return self._llm_client, self._llm_provider, self._llm_config
+            from core.llm import detect_backend, BACKENDS
+            backend = detect_backend()
+            if backend is None:
+                return None, None
+            cfg = BACKENDS[backend]
+            self._llm_config = {"model": cfg["model"], "aux_model": cfg["model"]}
+            self._llm_backend = backend
+        return self._llm_backend, self._llm_config
 
     # ── Scoring ──────────────────────────────────────────────────────────
 
@@ -1051,7 +1054,7 @@ class KnowledgeBaseMCPServer:
     # ── LLM Helpers ──────────────────────────────────────────────────────
 
     async def _rewrite_query(self, question: str) -> list:
-        from utils.llm_client import has_api_key, chat_create
+        from core.llm import has_api_key, chat_create
         if not has_api_key():
             return [question]
 
@@ -1074,8 +1077,9 @@ class KnowledgeBaseMCPServer:
             )
 
             def _call():
-                client, provider, config = self._get_llm()
-                return chat_create(client, provider, config["aux_model"], prompt, max_tokens=200)
+                backend, config = self._get_llm()
+                return chat_create(prompt, backend=backend,
+                                 model=config["aux_model"], max_tokens=200)
 
             result_text = await asyncio.to_thread(_call)
             raw = [v.strip() for v in result_text.strip().split("\n") if v.strip()]
@@ -1098,7 +1102,7 @@ class KnowledgeBaseMCPServer:
             return [question]
 
     async def _synthesize(self, question: str, snippets: list) -> str:
-        from utils.llm_client import has_api_key, chat_create
+        from core.llm import has_api_key, chat_create
         if not has_api_key():
             return ""
         if not snippets:
@@ -1128,8 +1132,9 @@ class KnowledgeBaseMCPServer:
             )
 
             def _call():
-                client, provider, config = self._get_llm()
-                return chat_create(client, provider, config["aux_model"], prompt, max_tokens=1000)
+                backend, config = self._get_llm()
+                return chat_create(prompt, backend=backend,
+                                 model=config["aux_model"], max_tokens=1000)
 
             result = await asyncio.to_thread(_call)
 

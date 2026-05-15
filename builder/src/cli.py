@@ -66,7 +66,18 @@ def get_kb_path() -> str:
 
 def cmd_init(args):
     """Initialize knowledge base"""
-    folder_path = os.path.abspath(args.folder_path)
+    if args.folder_path:
+        folder_path = os.path.abspath(args.folder_path)
+    else:
+        kb_root = os.environ.get('KB_ROOT')
+        if not kb_root:
+            print("❌ Error: No path specified and KB_ROOT environment variable not set")
+            print("   Set KB_ROOT or provide a path:")
+            print("   python src/cli.py init <folder_path>")
+            return
+        kb_name = args.name or 'new-kb'
+        folder_path = os.path.join(os.path.expanduser(kb_root), kb_name)
+        folder_path = os.path.abspath(folder_path)
     kb_name = args.name or os.path.basename(folder_path)
     
     print(f"🚀 Initializing Knowledge Base: {kb_name}")
@@ -604,19 +615,26 @@ Separate each concept article with exactly this line:
 # ---------- helpers -----------------------------------------
 
 def _llm_client(model_override: str = None):
-    """Return (client, provider, model, config) using the unified LLM layer."""
-    from utils.llm_client import get_llm_config, create_client
-    config = get_llm_config()
-    if model_override:
-        config["model"] = model_override
-    client, provider = create_client(config)
-    return client, provider, config["model"], config
+    """Return (backend, model, config) using the unified LLM layer."""
+    from core.llm import detect_backend, list_available, BACKENDS
+    backend = detect_backend()
+    if backend is None:
+        available = list_available()
+        if available:
+            backend = available[0]
+        else:
+            raise RuntimeError("No LLM backend available. Set an API key env var.")
+    cfg = BACKENDS[backend]
+    model = model_override or cfg["model"]
+    # Simulate old config dict for aux_model access
+    config = {"model": model, "aux_model": model}
+    return backend, model, config
 
 
-def _stream_message(client, provider, model, prompt, max_tokens=4096):
-    """Call the API with streaming; print dots as tokens arrive; return full text."""
-    from utils.llm_client import stream_message
-    return stream_message(client, provider, model, prompt, max_tokens)
+def _stream_message(backend, model, prompt, max_tokens=4096):
+    """Call the API with streaming; print progress; return full text."""
+    from core.llm import chat_stream
+    return chat_stream(prompt, backend=backend, model=model, max_tokens=max_tokens)
 
 
 def _estimate_cost(files: list, model: str) -> float:
@@ -1003,59 +1021,31 @@ def _extract_wiki_links(articles_dir: str) -> dict:
 
 # ---------- LLM compilation steps --------------------------
 
-def _compile_with_retry(client, provider, model: str, file_info: dict, kb_path: str,
+def _compile_with_retry(backend, model: str, file_info: dict, kb_path: str,
                         max_retries: int = 3) -> Tuple[Optional[str], Optional[str]]:
     """
-    Call _compile_document with exponential backoff for transient API errors.
+    Call _compile_document with simple retry for transient failures.
 
     Returns (article_text, error_message).
     On success: (text, None).
     On permanent failure: (None, error_string).
 
-    Retried errors:
-      - RateLimitError       → wait 30 / 60 / 120 s
-      - APIConnectionError   → wait 10 / 20 / 40 s
-      - APITimeoutError      → wait 10 / 20 / 40 s
-      - 5xx APIStatusError   → wait 15 / 30 / 60 s
-
-    Not retried (4xx client errors, bad input) → returns (None, message).
+    The underlying LLM client already has exponential backoff for HTTP
+    errors; this outer wrapper catches any remaining exceptions.
     """
     import time
-    from utils.llm_client import get_retry_exceptions
 
-    rate_exc, conn_excs, status_exc = get_retry_exceptions(provider)
     last_error = ""
-
     for attempt in range(max_retries):
         try:
-            result = _compile_document(client, provider, model, file_info, kb_path)
+            result = _compile_document(backend, model, file_info, kb_path)
             return result, None
 
-        except rate_exc as exc:
-            wait = 30 * (2 ** attempt)          # 30 / 60 / 120 s
+        except RuntimeError as exc:
+            # Backend already has retry; this is a final failure
             last_error = str(exc)
-            print(f"\n   ⏳ Rate limit — waiting {wait}s "
-                  f"(attempt {attempt + 1}/{max_retries})...", flush=True)
-            time.sleep(wait)
-
-        except conn_excs as exc:
-            wait = 10 * (2 ** attempt)          # 10 / 20 / 40 s
-            last_error = str(exc)
-            print(f"\n   ⏳ Connection/timeout — retrying in {wait}s "
-                  f"(attempt {attempt + 1}/{max_retries})...", flush=True)
-            time.sleep(wait)
-
-        except status_exc as exc:
-            code = getattr(exc, 'status_code', getattr(exc, 'http_status', 500))
-            if code >= 500:
-                wait = 15 * (2 ** attempt)      # 15 / 30 / 60 s
-                last_error = str(exc)
-                print(f"\n   ⏳ Server error {code} — retrying in {wait}s "
-                      f"(attempt {attempt + 1}/{max_retries})...", flush=True)
-                time.sleep(wait)
-            else:
-                msg = getattr(exc, 'message', str(exc))
-                return None, f"API {code}: {msg}"
+            print(f"\n   ⏳ LLM error — retrying (attempt {attempt + 1}/{max_retries})...", flush=True)
+            time.sleep(5)
 
         except Exception as exc:                # unexpected — don't retry
             return None, str(exc)
@@ -1063,7 +1053,7 @@ def _compile_with_retry(client, provider, model: str, file_info: dict, kb_path: 
     return None, f"Failed after {max_retries} retries: {last_error}"
 
 
-def _compile_document(client, provider, model: str, file_info: dict, kb_path: str) -> Optional[str]:
+def _compile_document(backend, model: str, file_info: dict, kb_path: str) -> Optional[str]:
     """Call LLM to write a wiki article for one document. Returns article text."""
     wiki_path = file_info.get("wiki_path", "")
     if not wiki_path:
@@ -1110,10 +1100,10 @@ def _compile_document(client, provider, model: str, file_info: dict, kb_path: st
         date=datetime.now().strftime("%Y-%m-%d"),
         text=text,
     )
-    return _stream_message(client, provider, model, prompt, max_tokens=6000)
+    return _stream_message(backend, model, prompt, max_tokens=6000)
 
 
-def _compile_index(client, provider, model: str, articles_dir: str) -> str:
+def _compile_index(backend, model: str, articles_dir: str) -> str:
     """Call LLM to generate _index.md from structured briefs of all articles."""
     summaries = []
     for fname in sorted(os.listdir(articles_dir)):
@@ -1127,10 +1117,10 @@ def _compile_index(client, provider, model: str, articles_dir: str) -> str:
         return ""
 
     prompt = _PROMPT_INDEX.format(summaries="\n\n---\n\n".join(summaries))
-    return _stream_message(client, provider, model, prompt, max_tokens=4096)
+    return _stream_message(backend, model, prompt, max_tokens=4096)
 
 
-def _compile_concepts(client, provider, model: str, articles_dir: str, n: int = 20) -> list:
+def _compile_concepts(backend, model: str, articles_dir: str, n: int = 20) -> list:
     """
     Call LLM to write concept articles for the top-N cross-referenced concepts.
     Returns list of (concept_name, article_markdown).
@@ -1158,7 +1148,7 @@ def _compile_concepts(client, provider, model: str, articles_dir: str, n: int = 
         links_data="\n\n".join(sections),
         n=min(n, len(top)),
     )
-    raw = _stream_message(client, provider, model, prompt, max_tokens=8192)
+    raw = _stream_message(backend, model, prompt, max_tokens=8192)
 
     # Split on the separator the LLM was told to use
     parts = raw.split("---CONCEPT_BREAK---")
@@ -1231,14 +1221,13 @@ def _cmd_compile_llm_inner(args, kb_path: str):
     run_index    = args.index    or not explicit
     run_concepts = args.concepts or not explicit
 
-    client, provider, model, llm_config = _llm_client(args.model)
+    backend, model, llm_config = _llm_client(args.model)
 
     # Auxiliary model for simpler tasks (index, concepts)
     _MODEL_AUX = llm_config["aux_model"]
 
-    from utils.llm_client import get_model_display
     print(f"📚  {config.get('name', 'Knowledge Base')}")
-    print(f"🤖  Model : {get_model_display()}")
+    print(f"🤖  Backend: {backend} / {model}")
     print(f"📋  Steps : {'docs ' if run_docs else ''}{'index ' if run_index else ''}{'concepts' if run_concepts else ''}")
 
     # ── Step 1: compile documents ──────────────────────────────────────────
@@ -1314,7 +1303,7 @@ def _cmd_compile_llm_inner(args, kb_path: str):
                         file_id = indexer.generate_file_id(file_info["path"])
 
                         article, error = _compile_with_retry(
-                            client, provider, model, file_info, kb_path
+                            backend, model, file_info, kb_path
                         )
 
                         if error:
@@ -1395,7 +1384,7 @@ def _cmd_compile_llm_inner(args, kb_path: str):
         print(f"\n── Index ───────────────────────────────────────────────")
         print("   Writing _index.md ", end="", flush=True)
 
-        index_text = _compile_index(client, provider, _MODEL_AUX, articles_dir)
+        index_text = _compile_index(backend, _MODEL_AUX, articles_dir)
         if index_text:
             write_text(os.path.join(kb_path, "wiki", "_index.md"), index_text)
             print("   ✅  _index.md")
@@ -1415,7 +1404,7 @@ def _cmd_compile_llm_inner(args, kb_path: str):
             n = min(args.concept_limit, len(multi))
             print(f"   Generating top {n} concept pages ", end="", flush=True)
 
-            concept_articles = _compile_concepts(client, provider, _MODEL_AUX, articles_dir, n=n)
+            concept_articles = _compile_concepts(backend, _MODEL_AUX, articles_dir, n=n)
             for concept_name, article_text in concept_articles:
                 fname = f"{sanitize_filename(concept_name)}.md"
                 write_text(os.path.join(concepts_dir, fname), article_text)
@@ -2037,7 +2026,7 @@ Examples:
     subparsers = parser.add_subparsers(dest='command', help='Available commands')
 
     init_parser = subparsers.add_parser('init', help='Initialize knowledge base')
-    init_parser.add_argument('folder_path', help='Knowledge base directory path')
+    init_parser.add_argument('folder_path', nargs='?', help='Knowledge base directory path (uses $KB_ROOT/{name} if omitted)')
     init_parser.add_argument('--name', '-n', help='Knowledge base name')
 
     ingest_parser = subparsers.add_parser('ingest', help='Ingest documents')
@@ -2140,13 +2129,20 @@ Examples:
   python src/cli.py compile-llm --docs                   # articles only
   python src/cli.py compile-llm --index                  # rebuild index only
   python src/cli.py compile-llm --concepts               # concept pages only
-  python src/cli.py compile-llm --full -y                # recompile everything, no prompt
+  python src/cli.py compile-llm --backend deepseek            # use DeepSeek
+  python src/cli.py compile-llm --backend openai --model gpt-4o-mini
 
 Environment:
-  LLM_PROVIDER        "claude" (default) or "kimi"
-  ANTHROPIC_API_KEY   required when LLM_PROVIDER=claude
-  KIMI_API_KEY        required when LLM_PROVIDER=kimi
+  Auto-detects backend from available API keys:
+    ANTHROPIC_API_KEY, OPENAI_API_KEY, DEEPSEEK_API_KEY,
+    MOONSHOT_API_KEY, ZHIPU_API_KEY, MINIMAX_API_KEY, GEMINI_API_KEY
+  LLM_PROVIDER  (deprecated) — use --backend instead
         """
+    )
+    compile_llm_parser.add_argument(
+        '--backend', default=None,
+        choices=['claude', 'openai', 'deepseek', 'kimi', 'zhipu', 'minimax', 'gemini'],
+        help='LLM backend (default: auto-detect from available API keys)'
     )
     compile_llm_parser.add_argument(
         '--model', default=None,

@@ -478,24 +478,25 @@ _REWRITE_CACHE_MAX = 100
 _REWRITE_CACHE_TTL = 1800    # 30 minutes
 
 # LLM client singleton — created once per process, reused across all requests
-_llm_singleton: tuple | None = None  # (client, provider, config)
+_llm_singleton: tuple | None = None  # (backend, config)
 _llm_singleton_lock = threading.Lock()
 
 
 def _get_llm_client():
-    """Return cached (client, provider, config) tuple; create on first call."""
+    """Return cached (backend, config) tuple; create on first call."""
     global _llm_singleton
     if _llm_singleton is not None:
         return _llm_singleton
     with _llm_singleton_lock:
         if _llm_singleton is not None:
             return _llm_singleton
-        from utils.llm_client import has_api_key, get_llm_config, create_client
+        from core.llm import detect_backend, has_api_key, BACKENDS
         if not has_api_key():
             return None
-        config = get_llm_config()
-        client, provider = create_client(config)
-        _llm_singleton = (client, provider, config)
+        backend = detect_backend()
+        cfg = BACKENDS[backend]
+        config = {"model": cfg["model"], "aux_model": cfg["model"]}
+        _llm_singleton = (backend, config)
         return _llm_singleton
 
 
@@ -535,7 +536,7 @@ async def _rewrite_query(question: str, req_id: str = "-") -> list:
     _rewrite_inflight[cache_key] = event
 
     try:
-        from utils.llm_client import chat_create
+        from core.llm import chat_create
 
         prompt = (
             "Generate 2-3 alternative phrasings of this research "
@@ -546,10 +547,11 @@ async def _rewrite_query(question: str, req_id: str = "-") -> list:
             f"Question: {question}"
         )
 
-        client, provider, config = llm
+        backend, config = llm
 
         def _call():
-            return chat_create(client, provider, config["aux_model"], prompt, max_tokens=200)
+            return chat_create(prompt, backend=backend,
+                             model=config["aux_model"], max_tokens=200)
 
         result_text = await asyncio.to_thread(_call)
         raw = [v.strip() for v in result_text.strip().split("\n") if v.strip()]
@@ -622,9 +624,9 @@ async def _synthesize_async(question: str, snippets: list,
 
     t0 = time.monotonic()
     try:
-        from utils.llm_client import chat_create_with_usage
+        from core.llm import chat
 
-        client, provider, config = llm
+        backend, config = llm
         sources = "\n\n---\n\n".join(snippets[:5])
         prompt = (
             f"Answer this research question in 4–6 sentences based solely on "
@@ -637,11 +639,13 @@ async def _synthesize_async(question: str, snippets: list,
         )
 
         def _call():
-            return chat_create_with_usage(
-                client, provider, config["aux_model"], prompt, max_tokens=1000
-            )
+            return chat(prompt, backend=backend,
+                       model=config["aux_model"], max_tokens=1000)
 
-        result_text, usage = await asyncio.to_thread(_call)
+        result = await asyncio.to_thread(_call)
+        result_text = result["content"]
+        usage = {"input_tokens": result.get("input_tokens", 0),
+                 "output_tokens": result.get("output_tokens", 0)}
         log.info(
             "synthesis_complete",
             extra={

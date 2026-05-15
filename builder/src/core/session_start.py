@@ -96,25 +96,20 @@ def run_ingest(kb_path: Path, python: str = "python3") -> bool:
 
 
 def run_compile(kb_path: Path, python: str = "python3") -> bool:
-    """Run compile-llm if ANTHROPIC_API_KEY is set."""
-    if "ANTHROPIC_API_KEY" not in os.environ:
-        return False
+    """Run LLM-powered compilation if any backend API key is available."""
+    from core.llm import list_available, detect_backend
 
-    builder_cli = kb_path.parent / "builder" / "src" / "cli.py"
-    if not builder_cli.exists():
-        script_dir = Path(__file__).parent
-        builder_cli = script_dir.parent / "src" / "cli.py"
-
-    if not builder_cli.exists():
+    if not list_available():
+        print("[session_start] No LLM API keys — skipping compile-llm")
         return False
 
     try:
-        result = subprocess.run(
-            [python, str(builder_cli), "compile-llm", "-y"],
-            cwd=str(kb_path),
-            capture_output=True, text=True, timeout=600,
-        )
-        return result.returncode == 0
+        from core.compiler import WikiCompiler
+        compiler = WikiCompiler(str(kb_path))
+        result = compiler.compile_with_llm(fallback=True)
+        print(f"[session_start] compile-llm: {result['concepts_total']} concepts, "
+              f"backend={result.get('backend', 'unknown')}")
+        return True
     except Exception as e:
         print(f"[session_start] Compile failed: {e}", file=sys.stderr)
         return False
@@ -191,12 +186,61 @@ def run_graphify_on_kb(kb_path: Path, python: str = "python3") -> bool:
 
 def main():
     parser = argparse.ArgumentParser(description="SessionStart auto-sync hook")
-    parser.add_argument("--kb-path", required=True, help="Knowledge base path")
+    parser.add_argument("--kb-path", nargs='?', help="Knowledge base path (omit with --all to scan $KB_ROOT)")
+    parser.add_argument("--all", action="store_true", help="Process all knowledge bases under $KB_ROOT")
     parser.add_argument("--cron", action="store_true", help="Cron mode (no user interaction)")
     parser.add_argument("--no-compile", action="store_true", help="Skip LLM compilation")
     args = parser.parse_args()
 
+    if args.all:
+        kb_root = os.environ.get('KB_ROOT')
+        if not kb_root:
+            print("[session_start] ❌ --all requires KB_ROOT environment variable", file=sys.stderr)
+            return 1
+        kb_root = Path(os.path.expanduser(kb_root)).resolve()
+        kb_dirs = find_all_kbs(kb_root)
+        if not kb_dirs:
+            print(f"[session_start] No knowledge bases found under {kb_root}")
+            return 0
+        print(f"[session_start] Found {len(kb_dirs)} knowledge base(s) under {kb_root}")
+        results = []
+        for kb_path in kb_dirs:
+            try:
+                rc = process_single_kb(kb_path, args)
+                results.append((kb_path.name, rc))
+            except Exception as e:
+                print(f"[session_start] ❌ {kb_path.name} failed: {e}", file=sys.stderr)
+                results.append((kb_path.name, 1))
+        for name, rc in results:
+            status = "✅" if rc == 0 else "❌"
+            print(f"[session_start] {status} {name}")
+        return 0
+
+    if not args.kb_path:
+        print("[session_start] ❌ Either --kb-path or --all is required", file=sys.stderr)
+        return 1
+
     kb_path = Path(args.kb_path).resolve()
+    return process_single_kb(kb_path, args)
+
+
+def find_all_kbs(kb_root: Path) -> list:
+    """Find all knowledge bases under kb_root (directories with .kbaconfig)."""
+    kbs = []
+    if not kb_root.is_dir():
+        return kbs
+    for entry in sorted(kb_root.iterdir()):
+        if entry.is_dir() and (entry / ".kbaconfig").exists():
+            kbs.append(entry)
+        elif entry.is_symlink() and entry.resolve().is_dir():
+            resolved = entry.resolve()
+            if (resolved / ".kbaconfig").exists():
+                kbs.append(resolved)
+    return kbs
+
+
+def process_single_kb(kb_path: Path, args) -> int:
+    """Process a single knowledge base. Returns exit code."""
     raw_dir = kb_path / "raw"
     manifest_file = kb_path / "wiki" / "_meta" / "session_manifest.json"
 
