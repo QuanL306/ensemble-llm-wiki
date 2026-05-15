@@ -66,7 +66,18 @@ def get_kb_path() -> str:
 
 def cmd_init(args):
     """Initialize knowledge base"""
-    folder_path = os.path.abspath(args.folder_path)
+    if args.folder_path:
+        folder_path = os.path.abspath(args.folder_path)
+    else:
+        kb_root = os.environ.get('KB_ROOT')
+        if not kb_root:
+            print("❌ Error: No path specified and KB_ROOT environment variable not set")
+            print("   Set KB_ROOT or provide a path:")
+            print("   python src/cli.py init <folder_path>")
+            return
+        kb_name = args.name or 'new-kb'
+        folder_path = os.path.join(os.path.expanduser(kb_root), kb_name)
+        folder_path = os.path.abspath(folder_path)
     kb_name = args.name or os.path.basename(folder_path)
     
     print(f"🚀 Initializing Knowledge Base: {kb_name}")
@@ -2024,7 +2035,7 @@ Examples:
     subparsers = parser.add_subparsers(dest='command', help='Available commands')
 
     init_parser = subparsers.add_parser('init', help='Initialize knowledge base')
-    init_parser.add_argument('folder_path', help='Knowledge base directory path')
+    init_parser.add_argument('folder_path', nargs='?', help='Knowledge base directory path (uses $KB_ROOT/{name} if omitted)')
     init_parser.add_argument('--name', '-n', help='Knowledge base name')
 
     ingest_parser = subparsers.add_parser('ingest', help='Ingest documents')

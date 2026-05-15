@@ -1,0 +1,12 @@
+# knowledge-base-suite-en — ensemble LLM wiki builder
+# Install: pip install -r requirements.txt
+
+# PDF document parsing
+PyMuPDF>=1.23.0
+
+# Chinese NLP (word segmentation + POS tagging for concept extraction)
+jieba>=0.42
+
+# Knowledge graph generation (https://github.com/safishamsi/graphify)
+# Installs networkx, scipy, datasketch, rapidfuzz as sub-dependencies
+graphifyy>=0.8.0

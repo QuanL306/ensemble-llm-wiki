@@ -44,9 +44,8 @@ def find_graphify_python() -> str:
 
 def run_graphify(input_dir: Path, mode: str = "standard", python: str = "python3") -> bool:
     """Run graphify full pipeline on input directory"""
-    flags = ["--mode", "deep"] if mode == "deep" else []
-    
-    cmd = [python, "-m", "graphify", str(input_dir)] + flags
+    # graphify extract: https://github.com/safishamsi/graphify
+    cmd = [python, "-m", "graphify", "extract", str(input_dir)]
     print(f"🔍 Running: {' '.join(cmd)}")
     
     try:
