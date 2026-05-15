@@ -13,6 +13,9 @@ EbookLib>=0.18
 beautifulsoup4>=4.12
 
 # Chinese NLP (word segmentation + POS tagging for concept extraction)
+# Only needed when building Chinese-language knowledge bases.
+# English-only users can safely skip: pip install -r requirements.txt --ignore-requires-python
+# or just comment this line out before installing.
 jieba>=0.42
 
 # Knowledge graph generation (https://github.com/safishamsi/graphify)

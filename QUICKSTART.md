@@ -22,9 +22,32 @@ pip install -r cloud_platform/requirements.txt
 # Install Skill Seekers for web/GitHub/video ingestion (optional)
 pip install skill-seekers          # basic
 pip install skill-seekers[all]     # full (video, async, all platforms)
+```
 
-# Install Anthropic SDK for LLM-driven compilation (optional)
-pip install anthropic
+## LLM API Key Setup
+
+`compile-llm` and the MCP server's query synthesis work with any of these providers —
+set whichever key you have and the system auto-detects it:
+
+| Provider | Env var | Sign up |
+|----------|---------|---------|
+| DeepSeek | `DEEPSEEK_API_KEY` | platform.deepseek.com |
+| OpenAI | `OPENAI_API_KEY` | platform.openai.com |
+| Kimi (Moonshot) | `MOONSHOT_API_KEY` | platform.moonshot.cn |
+| Claude (Anthropic) | `ANTHROPIC_API_KEY` | console.anthropic.com |
+| Gemini (Google) | `GEMINI_API_KEY` | aistudio.google.com |
+| Zhipu GLM | `ZHIPU_API_KEY` | open.bigmodel.cn |
+| MiniMax | `MINIMAX_API_KEY` | api.minimax.chat |
+
+To override auto-detection, set `LLM_BACKEND=deepseek` (or any provider name above).
+No extra SDK installation is needed — all providers use the standard library only.
+
+```bash
+# Example — pick whichever you have:
+export DEEPSEEK_API_KEY=sk-...
+export OPENAI_API_KEY=sk-...
+export ANTHROPIC_API_KEY=sk-ant-...
+export GEMINI_API_KEY=AIza...
 ```
 
 ## Usage Scenarios
@@ -43,9 +66,9 @@ cp ~/Downloads/*.pdf ~/my-research/raw/
 # Ingest: extract and index all documents
 python cli.py ingest
 
-# Compile Option A — LLM-driven (recommended, requires ANTHROPIC_API_KEY)
-export ANTHROPIC_API_KEY=sk-ant-...
-python cli.py compile-llm           # writes real wiki articles via Claude
+# Compile Option A — LLM-driven (recommended, requires any LLM API key)
+export DEEPSEEK_API_KEY=sk-...      # or OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.
+python cli.py compile-llm           # writes real wiki articles via LLM
 
 # Compile Option B — regex-based (no API key, fast structural scaffold)
 python cli.py compile
@@ -76,11 +99,12 @@ python cli.py fetch-list
 
 ### Scenario 3: LLM-Driven Wiki Compilation
 
-The `compile-llm` command uses Claude to write real wiki articles — not regex-extracted
+The `compile-llm` command uses an LLM to write real wiki articles — not regex-extracted
 summaries, but genuine analysis with cross-references, retrieval hints, and concept pages.
+Works with any supported provider (see **LLM API Key Setup** above).
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...
+export DEEPSEEK_API_KEY=sk-...      # or any other supported key
 cd ~/my-research
 
 # Full pipeline (articles → index → concept pages)
@@ -94,8 +118,9 @@ python src/cli.py compile-llm --concepts   # concept pages for [[links]]
 # Force recompile all (even already-compiled documents)
 python src/cli.py compile-llm --full -y
 
-# Use Opus for higher quality on important knowledge bases
-python src/cli.py compile-llm --model claude-opus-4-5
+# Use a specific model (overrides provider default)
+python src/cli.py compile-llm --model gpt-4o
+python src/cli.py compile-llm --model claude-opus-4-7
 ```
 
 ### Scenario 4: AI-Powered Research Assistant (Local MCP)
@@ -216,7 +241,7 @@ python cli.py fetch https://www.youtube.com/watch?v=...
 | `init <path>` | Initialize a new knowledge base |
 | `ingest` | Extract and index documents from `raw/` |
 | `compile` | Regex-based wiki compilation (no API key) |
-| `compile-llm` | LLM-driven wiki compilation (requires `ANTHROPIC_API_KEY`) |
+| `compile-llm` | LLM-driven wiki compilation (requires any LLM API key) |
 | `fetch <source>` | Fetch from web/GitHub/video via Skill Seekers |
 | `fetch-list` | List previously fetched skills |
 | `search <query>` | Keyword search against local index |
@@ -255,7 +280,7 @@ my-research/
 |---------|----------|
 | OCR not working | `brew install tesseract` (macOS) or `apt install tesseract-ocr` |
 | `skill-seekers` not found | `pip install skill-seekers` |
-| `compile-llm` fails | Check `ANTHROPIC_API_KEY` is set; `pip install anthropic` |
+| `compile-llm` fails | Set at least one LLM API key (see **LLM API Key Setup**); no extra SDK needed |
 | Permission denied on CLI | `chmod +x builder/src/cli.py` |
 | Port already in use (server) | `python server.py --port 8001` |
 | Large PDFs slow | Process in batches; consider splitting large files first |
