@@ -616,7 +616,7 @@ Separate each concept article with exactly this line:
 
 def _llm_client(model_override: str = None):
     """Return (backend, model, config) using the unified LLM layer."""
-    from core.llm import detect_backend, list_available, BACKENDS
+    from core.llm import detect_backend, list_available, BACKENDS, make_config
     backend = detect_backend()
     if backend is None:
         available = list_available()
@@ -624,17 +624,16 @@ def _llm_client(model_override: str = None):
             backend = available[0]
         else:
             raise RuntimeError("No LLM backend available. Set an API key env var.")
-    cfg = BACKENDS[backend]
-    model = model_override or cfg["model"]
-    # Simulate old config dict for aux_model access
-    config = {"model": model, "aux_model": model}
+    model = model_override or BACKENDS[backend]["model"]
+    config = make_config(backend)
+    config["model"] = model
     return backend, model, config
 
 
 def _stream_message(backend, model, prompt, max_tokens=4096):
-    """Call the API with streaming; print progress; return full text."""
-    from core.llm import chat_stream
-    return chat_stream(prompt, backend=backend, model=model, max_tokens=max_tokens)
+    """Call the API with a progress indicator; return full text."""
+    from core.llm import chat_blocking
+    return chat_blocking(prompt, backend=backend, model=model, max_tokens=max_tokens)
 
 
 def _estimate_cost(files: list, model: str) -> float:
@@ -1034,6 +1033,7 @@ def _compile_with_retry(backend, model: str, file_info: dict, kb_path: str,
     errors; this outer wrapper catches any remaining exceptions.
     """
     import time
+    from core.llm import LLMTransientError, LLMPermanentError
 
     last_error = ""
     for attempt in range(max_retries):
@@ -1041,8 +1041,10 @@ def _compile_with_retry(backend, model: str, file_info: dict, kb_path: str,
             result = _compile_document(backend, model, file_info, kb_path)
             return result, None
 
-        except RuntimeError as exc:
-            # Backend already has retry; this is a final failure
+        except LLMPermanentError as exc:        # auth/config failure — never retry
+            return None, str(exc)
+
+        except LLMTransientError as exc:        # rate limit / network — retry
             last_error = str(exc)
             print(f"\n   ⏳ LLM error — retrying (attempt {attempt + 1}/{max_retries})...", flush=True)
             time.sleep(5)

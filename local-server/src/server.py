@@ -132,12 +132,11 @@ class KnowledgeBaseMCPServer:
             )
             if src not in sys.path:
                 sys.path.insert(0, src)
-            from core.llm import detect_backend, BACKENDS
+            from core.llm import detect_backend, make_config
             backend = detect_backend()
             if backend is None:
                 return None, None
-            cfg = BACKENDS[backend]
-            self._llm_config = {"model": cfg["model"], "aux_model": cfg["model"]}
+            self._llm_config = make_config(backend)
             self._llm_backend = backend
         return self._llm_backend, self._llm_config
 

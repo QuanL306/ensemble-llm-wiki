@@ -76,9 +76,19 @@ BACKENDS: Dict[str, Dict[str, Any]] = {
 _AUTO_PRIORITY = ["deepseek", "openai", "kimi", "claude", "gemini", "zhipu", "minimax"]
 
 
+# ── Exception hierarchy ──────────────────────────────────────────
+
+class LLMTransientError(RuntimeError):
+    """Transient failure (rate limit, server error, network). Safe to retry."""
+
+
+class LLMPermanentError(RuntimeError):
+    """Permanent failure (bad auth, invalid request). Do not retry."""
+
+
 # ── Public API ───────────────────────────────────────────────────
 
-def _resolve_api_key(backend_name: str) -> Optional[str]:
+def _resolve_api_key(backend_name: str) -> str:
     """Get API key for a backend, checking primary env var + fallbacks."""
     cfg = BACKENDS[backend_name]
     key = os.environ.get(cfg["api_key_env"], "")
@@ -111,11 +121,18 @@ def detect_backend() -> Optional[str]:
     if explicit and explicit in BACKENDS and _resolve_api_key(explicit):
         return explicit
 
-    # Auto-detect
+    # Auto-detect: log which backend is chosen so misconfigured envs are obvious
     for name in _AUTO_PRIORITY:
         if _resolve_api_key(name):
+            print(f"[llm] Auto-detected backend: {name}", file=sys.stderr)
             return name
     return None
+
+
+def make_config(backend: str) -> Dict[str, str]:
+    """Return a {model, aux_model} config dict for a backend."""
+    model = BACKENDS[backend]["model"]
+    return {"model": model, "aux_model": model}
 
 
 def list_available() -> List[str]:
@@ -185,13 +202,25 @@ def chat(
                 prompt, system, temperature, max_tokens,
             )
         else:
-            raise ValueError(f"Unknown provider: {provider}")
+            raise LLMPermanentError(f"Unknown provider: {provider}")
 
         result["backend"] = backend
         return result
 
+    except (LLMTransientError, LLMPermanentError):
+        raise  # already classified, pass through
+    except urllib.error.HTTPError as e:
+        if e.code in (401, 403):
+            raise LLMPermanentError(
+                f"[{backend}] Auth failed (HTTP {e.code}): check your API key"
+            ) from e
+        raise LLMTransientError(
+            f"[{backend}] HTTP {e.code} failed after retries"
+        ) from e
+    except (urllib.error.URLError, OSError) as e:
+        raise LLMTransientError(f"[{backend}] Network error after retries: {e}") from e
     except Exception as e:
-        raise RuntimeError(f"[{backend}] LLM call failed: {e}") from e
+        raise LLMTransientError(f"[{backend}] LLM call failed: {e}") from e
 
 
 # ── Retry helper ─────────────────────────────────────────────────
@@ -272,8 +301,10 @@ def _call_openai_compat(
 
     data = _retry_with_backoff(_do_request)
 
+    choices = data.get("choices") or []
+    content = choices[0].get("message", {}).get("content", "") if choices else ""
     return {
-        "content": data["choices"][0]["message"]["content"],
+        "content": content,
         "input_tokens": data.get("usage", {}).get("prompt_tokens", 0),
         "output_tokens": data.get("usage", {}).get("completion_tokens", 0),
     }
@@ -340,8 +371,6 @@ def _call_gemini(
     max_tokens: int,
 ) -> Dict[str, Any]:
     """Google Gemini generateContent API."""
-    url = f"{base_url}?key={api_key}"
-
     contents: List[Dict[str, Any]] = []
     if system:
         # Inject system prompt as a user→model exchange (Gemini lacks
@@ -358,10 +387,14 @@ def _call_gemini(
         },
     }).encode("utf-8")
 
+    # Use header auth — avoids key appearing in URLs and exception messages.
     req = urllib.request.Request(
-        url,
+        base_url,
         data=body,
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            "x-goog-api-key": api_key,
+        },
     )
 
     def _do_request():
@@ -433,14 +466,21 @@ def _call_minimax(
         print(f"[llm] MiniMax: unrecognized response format, keys={list(data.keys())[:5]}",
               file=sys.stderr)
 
-    # MiniMax v2 API returns total_tokens (not split). We report
-    # total as input_tokens and flag the estimate.
-    total = data.get("usage", {}).get("total_tokens", 0)
+    # MiniMax v2 may return split or only total_tokens. Prefer split when available.
+    usage = data.get("usage", {})
+    input_tok = usage.get("prompt_tokens", 0)
+    output_tok = usage.get("completion_tokens", 0)
+    estimated = False
+    if input_tok == 0 and output_tok == 0:
+        total = usage.get("total_tokens", 0)
+        input_tok = int(total * 0.65)
+        output_tok = total - input_tok
+        estimated = True
     return {
         "content": content,
-        "input_tokens": total,
-        "output_tokens": 0,
-        "_tokens_estimated": True,
+        "input_tokens": input_tok,
+        "output_tokens": output_tok,
+        "_tokens_estimated": estimated,
     }
 
 
@@ -470,7 +510,7 @@ def chat_create(
     return result["content"]
 
 
-def chat_stream(
+def chat_blocking(
     prompt: str,
     backend: Optional[str] = None,
     model: Optional[str] = None,
@@ -478,11 +518,10 @@ def chat_stream(
     max_tokens: int = 4096,
     temperature: float = 0.3,
 ) -> str:
-    """Streaming-compatible call (prints progress, returns full text).
+    """Blocking call with progress indicator; returns full text.
 
-    Currently non-streaming under the hood (urllib doesn't expose
-    chunked transfer incrementally). Calls chat() with a progress
-    indicator.
+    Not streaming — urllib doesn't support incremental chunked reads.
+    Prints a start/done line to stderr so long compilations aren't silent.
     """
     label = f"{backend or detect_backend() or 'auto'}"
     print(f"[llm] Calling {label} ({model or 'default'})...", file=sys.stderr)

@@ -490,13 +490,11 @@ def _get_llm_client():
     with _llm_singleton_lock:
         if _llm_singleton is not None:
             return _llm_singleton
-        from core.llm import detect_backend, has_api_key, BACKENDS
+        from core.llm import detect_backend, has_api_key, make_config
         if not has_api_key():
             return None
         backend = detect_backend()
-        cfg = BACKENDS[backend]
-        config = {"model": cfg["model"], "aux_model": cfg["model"]}
-        _llm_singleton = (backend, config)
+        _llm_singleton = (backend, make_config(backend))
         return _llm_singleton
 
 
