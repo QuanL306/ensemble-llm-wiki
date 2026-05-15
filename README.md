@@ -117,6 +117,89 @@ python server.py --kb-path ~/my-kb
 python ../builder/src/core/session_start.py --kb-path ~/my-kb
 ```
 
+## Building from Local PDFs
+
+You already have a folder of PDFs. Which path to take depends on content type:
+
+| Content type | Examples | Recommended path |
+|---|---|---|
+| Prose-heavy | Books, essays, research papers, reports | Direct ingest |
+| Technical / code-heavy | Programming textbooks, API docs, papers with algorithms | Skill Seekers first |
+
+Skill Seekers does structured extraction that the builder's raw PDF reader does not: it detects code blocks across pages (3 methods + quality scoring), identifies 19+ programming languages, merges split code blocks, and organises content into chapters. For prose-only PDFs the output is equivalent, so the extra step is unnecessary.
+
+---
+
+### Case 1 — Prose PDFs (books, papers, reports)
+
+```bash
+cd builder/src
+
+# Initialise a KB (skip if you already have one)
+python cli.py init ~/my-kb --name "Research Library"
+
+# Copy your PDFs into the raw/ intake folder
+cp /path/to/your/pdfs/*.pdf ~/my-kb/raw/
+
+# Ingest: extract text + metadata from every file in raw/
+python cli.py ingest
+
+# Compile: LLM writes wiki articles + builds search index + embeddings
+python cli.py compile-llm --docs
+```
+
+Then serve it:
+
+```bash
+cd ../../local-server/src
+python server.py --kb-path ~/my-kb
+```
+
+---
+
+### Case 2 — Technical / code-heavy PDFs
+
+Use the built-in `fetch` command, which runs Skill Seekers and auto-ingests the result in one step:
+
+```bash
+cd builder/src
+
+# Initialise a KB (skip if you already have one)
+python cli.py init ~/my-kb --name "Tech Library"
+
+# Fetch + ingest each PDF via Skill Seekers
+# (repeat for every PDF you want to include)
+python cli.py fetch /path/to/your/pdfs/book.pdf
+python cli.py fetch /path/to/your/pdfs/paper.pdf
+
+# Compile once all PDFs are fetched
+python cli.py compile-llm --docs
+```
+
+Skill Seekers output lands in `~/my-kb/raw/skill_seekers/<slug>/` as structured Markdown. The `fetch` command ingests it automatically, so you go straight to compile when done.
+
+**Batch fetch a whole folder:**
+
+```bash
+for pdf in /path/to/your/pdfs/*.pdf; do
+    python cli.py fetch "$pdf"
+done
+python cli.py compile-llm --docs
+```
+
+**Check what was fetched:**
+
+```bash
+python cli.py fetch-list
+```
+
+Then serve:
+
+```bash
+cd ../../local-server/src
+python server.py --kb-path ~/my-kb
+```
+
 ## Directory Structure
 
 ```
