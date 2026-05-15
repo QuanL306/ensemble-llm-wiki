@@ -153,80 +153,63 @@ class TestChunkDocument:
 # Group 3: _compile_with_retry
 # ═══════════════════════════════════════════════════════════════════════════
 
-try:
-    import anthropic as _anthropic_mod
-    _HAS_ANTHROPIC = True
-except ImportError:
-    _anthropic_mod = None
-    _HAS_ANTHROPIC = False
 
-
-@pytest.mark.skipif(not _HAS_ANTHROPIC, reason="anthropic SDK not installed")
 class TestCompileWithRetry:
     """
-    API retry wrapper: exponential backoff on transient errors,
-    immediate failure on 4xx errors.
+    API retry wrapper: RuntimeError triggers retry, any other
+    exception fails immediately.  No SDK dependency — retry
+    logic resides in core/llm._retry_with_backoff.
     """
-
-    _DUMMY_CLIENT = MagicMock()
 
     def test_success_on_first_call_returns_article(self):
         expected = "# Article\n\nContent here."
         with patch.object(cli, "_compile_document", return_value=expected):
             result, error = cli._compile_with_retry(
-                self._DUMMY_CLIENT, "claude", "claude-sonnet-4-5", {}, "/tmp"
+                "deepseek", "deepseek-chat", {}, "/tmp"
             )
         assert error is None
         assert result == expected
 
-    def test_retries_after_rate_limit_then_succeeds(self):
-        """Should retry and succeed on the second attempt."""
+    def test_retries_after_runtime_error_then_succeeds(self):
+        """RuntimeError triggers retry; succeed on second attempt."""
         call_count = 0
 
         def side_effect(*args, **kwargs):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                mock_resp = MagicMock()
-                mock_resp.status_code = 429
-                raise _anthropic_mod.RateLimitError(
-                    "rate limited", response=mock_resp, body={}
-                )
+                raise RuntimeError("transient failure")
             return "# Article after retry"
 
         with patch.object(cli, "_compile_document", side_effect=side_effect), \
              patch("time.sleep"):
             result, error = cli._compile_with_retry(
-                self._DUMMY_CLIENT, "claude", "claude-sonnet-4-5", {}, "/tmp", max_retries=3
+                "deepseek", "deepseek-chat", {}, "/tmp", max_retries=3
             )
 
         assert error is None, f"Expected success, got error: {error}"
         assert result == "# Article after retry"
         assert call_count == 2, f"Expected 2 calls (1 fail + 1 success), got {call_count}"
 
-    def test_4xx_error_returns_error_without_retry(self):
-        """Client errors (4xx) must not be retried."""
+    def test_non_runtime_error_fails_immediately(self):
+        """ValueError (or any non-RuntimeError) must NOT be retried."""
         call_count = 0
 
         def side_effect(*args, **kwargs):
             nonlocal call_count
             call_count += 1
-            mock_resp = MagicMock()
-            mock_resp.status_code = 400
-            raise _anthropic_mod.BadRequestError(
-                "bad request", response=mock_resp, body={}
-            )
+            raise ValueError("bad input")
 
         with patch.object(cli, "_compile_document", side_effect=side_effect), \
              patch("time.sleep"):
             result, error = cli._compile_with_retry(
-                self._DUMMY_CLIENT, "claude", "claude-sonnet-4-5", {}, "/tmp", max_retries=3
+                "deepseek", "deepseek-chat", {}, "/tmp", max_retries=3
             )
 
         assert result is None
         assert error is not None
         assert call_count == 1, (
-            f"Expected exactly 1 call (no retry for 4xx), got {call_count}"
+            f"Expected exactly 1 call (no retry for ValueError), got {call_count}"
         )
 
     def test_exhausted_retries_returns_error_string(self):
@@ -234,10 +217,10 @@ class TestCompileWithRetry:
         with patch.object(
             cli,
             "_compile_document",
-            side_effect=_anthropic_mod.APIConnectionError(request=MagicMock()),
+            side_effect=RuntimeError("persistent failure"),
         ), patch("time.sleep"):
             result, error = cli._compile_with_retry(
-                self._DUMMY_CLIENT, "claude", "claude-sonnet-4-5", {}, "/tmp", max_retries=2
+                "deepseek", "deepseek-chat", {}, "/tmp", max_retries=2
             )
 
         assert result is None
