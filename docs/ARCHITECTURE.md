@@ -215,9 +215,10 @@ Confidence-aware:
 - `kb_search` shows confidence tier per result
 
 **Syntheses** — `kb_save_synthesis(question, answer, sources)` writes a permanent wiki page to `wiki/syntheses/<slug>.md` with YAML frontmatter (`type: synthesis`). Syntheses are:
-- Searchable alongside compiled articles via `kb_search` and `kb_list_docs`
+- Searchable alongside compiled articles via `kb_query`, `kb_search`, and `kb_list_docs`
 - Listed with a `(synthesis)` suffix in `kb_list_docs`
 - Written by the AI at query time rather than compiled from source documents
+- A knowledge growth loop: each saved synthesis becomes a retrievable source for future queries, so the KB accumulates derived knowledge over time without manual curation
 
 ### Retrieval scoring model
 
@@ -306,6 +307,6 @@ Old KBs without an `owner` field in `.kbaconfig` are migrated transparently — 
 
 **Shared KB via header, not URL**: `X-KB-Owner-ID` defaults to `X-User-ID` — existing single-user clients continue working without any change. Ownership and membership are resolved entirely server-side from `.kbaconfig`; the gateway never needs to know the KB directory structure.
 
-**Syntheses vs articles**: Articles are compiled by the LLM from source documents at build time. Syntheses are written by the AI at query time in response to a specific question. They are stored separately (`wiki/syntheses/`) but searched alongside articles. The separation makes provenance clear — a synthesis has no confidence score because it has no independent sources.
+**Syntheses vs articles**: Articles are compiled by the LLM from source documents at build time. Syntheses are written by the AI at query time in response to a specific question. They are stored separately (`wiki/syntheses/`) but searched alongside articles by `kb_query`, `kb_search`, and `kb_list_docs`. The separation makes provenance clear — a synthesis has no confidence score because it has no independent sources. Because syntheses are searchable at query time, each saved answer can surface to inform future queries, creating a compounding knowledge growth loop without manual curation.
 
 **Transcript harvesting with credential scrubbing**: Session transcripts often contain sensitive data typed during coding work. The harvester redacts credential patterns (API keys, passwords, Bearer tokens) before writing to disk — failing safe (over-redacting) rather than under-redacting.

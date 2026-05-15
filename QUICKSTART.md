@@ -230,8 +230,12 @@ python cli.py fetch https://www.youtube.com/watch?v=...
 ```
 my-research/
 ├── .kbaconfig            # KB configuration
-├── raw/                  # Source documents
-│   ├── papers/           # Your PDFs / EPUBs
+├── raw/                  # Source documents (subfolders are organizational only)
+│   ├── articles/         # Blog posts, essays, web articles
+│   ├── books/            # EPUBs, full-length book PDFs
+│   ├── papers/           # Academic papers, research reports
+│   ├── images/           # Standalone image files
+│   ├── web_clips/        # Saved web pages, browser clippings
 │   └── skill_seekers/    # Fetched via `fetch` command
 │       ├── docs_langchain_com/
 │       │   ├── SKILL.md
