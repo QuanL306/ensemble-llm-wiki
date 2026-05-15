@@ -20,6 +20,8 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
+import urllib.error
 import urllib.request
 from typing import Any, Dict, List, Optional
 
@@ -160,6 +162,44 @@ def chat(
         raise RuntimeError(f"[{backend}] LLM call failed: {e}") from e
 
 
+# ── Retry helper ─────────────────────────────────────────────────
+
+def _retry_with_backoff(fn, max_attempts=3, base_delay=2.0):
+    """Retry with exponential backoff on transient HTTP errors.
+
+    Retries on: 429 (rate limit), 5xx (server error), URLError (network).
+    Does NOT retry on: 4xx (except 429), JSON parse errors.
+    """
+    last_err = None
+    for attempt in range(max_attempts):
+        try:
+            return fn()
+        except urllib.error.HTTPError as e:
+            if e.code == 429 or 500 <= e.code < 600:
+                last_err = e
+                if attempt < max_attempts - 1:
+                    delay = base_delay * (2 ** attempt)
+                    print(f"[llm] HTTP {e.code}, retrying in {delay:.0f}s "
+                          f"(attempt {attempt + 1}/{max_attempts})",
+                          file=sys.stderr)
+                    time.sleep(delay)
+                else:
+                    raise
+            else:
+                raise
+        except (urllib.error.URLError, OSError) as e:
+            last_err = e
+            if attempt < max_attempts - 1:
+                delay = base_delay * (2 ** attempt)
+                print(f"[llm] Network error, retrying in {delay:.0f}s "
+                      f"(attempt {attempt + 1}/{max_attempts})",
+                      file=sys.stderr)
+                time.sleep(delay)
+            else:
+                raise
+    raise last_err  # type: ignore[misc]
+
+
 # ── Provider implementations ─────────────────────────────────────
 
 def _call_openai_compat(
@@ -194,8 +234,11 @@ def _call_openai_compat(
         },
     )
 
-    with urllib.request.urlopen(req, timeout=120) as resp:
-        data = json.loads(resp.read())
+    def _do_request():
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            return json.loads(resp.read())
+
+    data = _retry_with_backoff(_do_request)
 
     return {
         "content": data["choices"][0]["message"]["content"],
@@ -236,8 +279,11 @@ def _call_anthropic(
         },
     )
 
-    with urllib.request.urlopen(req, timeout=120) as resp:
-        data = json.loads(resp.read())
+    def _do_request():
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            return json.loads(resp.read())
+
+    data = _retry_with_backoff(_do_request)
 
     content_blocks = data.get("content", [])
     text = "".join(
@@ -266,6 +312,8 @@ def _call_gemini(
 
     contents: List[Dict[str, Any]] = []
     if system:
+        # Inject system prompt as a user→model exchange (Gemini lacks
+        # native system prompt in v1beta; revisit when GA adds it).
         contents.append({"role": "user", "parts": [{"text": system}]})
         contents.append({"role": "model", "parts": [{"text": "Understood."}]})
     contents.append({"role": "user", "parts": [{"text": prompt}]})
@@ -284,13 +332,11 @@ def _call_gemini(
         headers={"Content-Type": "application/json"},
     )
 
-    try:
+    def _do_request():
         with urllib.request.urlopen(req, timeout=120) as resp:
-            data = json.loads(resp.read())
-    except urllib.error.HTTPError as e:
-        # Try alternate endpoint format (some Gemini setups use different URL)
-        body_text = e.read().decode()
-        raise RuntimeError(f"Gemini API error: {body_text}") from e
+            return json.loads(resp.read())
+
+    data = _retry_with_backoff(_do_request)
 
     candidates = data.get("candidates", [])
     text = ""
@@ -336,16 +382,85 @@ def _call_minimax(
         },
     )
 
-    with urllib.request.urlopen(req, timeout=120) as resp:
-        data = json.loads(resp.read())
+    def _do_request():
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            return json.loads(resp.read())
 
-    reply = data.get("reply", "")
-    # MiniMax returns reply as string or doesn't include usage
+    data = _retry_with_backoff(_do_request)
+
+    # MiniMax v2 returns {"reply": "text"} for simple responses.
+    # Some models return OpenAI-compat format {"choices": [...]}.
+    reply = data.get("reply")
+    if isinstance(reply, str) and reply:
+        content = reply
+    elif "choices" in data and data["choices"]:
+        content = data["choices"][0].get("message", {}).get("content", "")
+    else:
+        # Unknown format — return raw JSON so caller can debug
+        content = json.dumps(data, ensure_ascii=False)
+        print(f"[llm] MiniMax: unrecognized response format, keys={list(data.keys())[:5]}",
+              file=sys.stderr)
+
+    # MiniMax v2 API returns total_tokens (not split). We report
+    # total as input_tokens and flag the estimate.
+    total = data.get("usage", {}).get("total_tokens", 0)
     return {
-        "content": reply if isinstance(reply, str) else data.get("choices", [{}])[0].get("message", {}).get("content", ""),
-        "input_tokens": data.get("usage", {}).get("total_tokens", 0) // 2,
-        "output_tokens": data.get("usage", {}).get("total_tokens", 0) // 2,
+        "content": content,
+        "input_tokens": total,
+        "output_tokens": 0,
+        "_tokens_estimated": True,
     }
+
+
+# ── Compatibility layer (drop-in for old utils/llm_client callers) ─
+
+def has_api_key() -> bool:
+    """Check if any LLM API key is configured (compat)."""
+    return detect_backend() is not None
+
+
+def chat_create(
+    prompt: str,
+    backend: Optional[str] = None,
+    model: Optional[str] = None,
+    system: Optional[str] = None,
+    max_tokens: int = 1000,
+    temperature: float = 0.3,
+) -> str:
+    """Non-streaming call, returns text only (compat with old chat_create).
+
+    This replaces the SDK-based utils/llm_client.chat_create().
+    """
+    result = chat(
+        prompt, backend=backend, model=model, system=system,
+        max_tokens=max_tokens, temperature=temperature,
+    )
+    return result["content"]
+
+
+def chat_stream(
+    prompt: str,
+    backend: Optional[str] = None,
+    model: Optional[str] = None,
+    system: Optional[str] = None,
+    max_tokens: int = 4096,
+    temperature: float = 0.3,
+) -> str:
+    """Streaming-compatible call (prints progress, returns full text).
+
+    Currently non-streaming under the hood (urllib doesn't expose
+    chunked transfer incrementally). Calls chat() with a progress
+    indicator.
+    """
+    label = f"{backend or detect_backend() or 'auto'}"
+    print(f"[llm] Calling {label} ({model or 'default'})...", file=sys.stderr)
+    result = chat(
+        prompt, backend=backend, model=model, system=system,
+        max_tokens=max_tokens, temperature=temperature,
+    )
+    print(f"[llm] Done ({result.get('input_tokens', '?')} in / "
+          f"{result.get('output_tokens', '?')} out tokens)", file=sys.stderr)
+    return result["content"]
 
 
 # ── High-level helpers ───────────────────────────────────────────
