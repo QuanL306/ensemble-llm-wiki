@@ -96,25 +96,20 @@ def run_ingest(kb_path: Path, python: str = "python3") -> bool:
 
 
 def run_compile(kb_path: Path, python: str = "python3") -> bool:
-    """Run compile-llm if ANTHROPIC_API_KEY is set."""
-    if "ANTHROPIC_API_KEY" not in os.environ:
-        return False
+    """Run LLM-powered compilation if any backend API key is available."""
+    from core.llm import list_available, detect_backend
 
-    builder_cli = kb_path.parent / "builder" / "src" / "cli.py"
-    if not builder_cli.exists():
-        script_dir = Path(__file__).parent
-        builder_cli = script_dir.parent / "src" / "cli.py"
-
-    if not builder_cli.exists():
+    if not list_available():
+        print("[session_start] No LLM API keys — skipping compile-llm")
         return False
 
     try:
-        result = subprocess.run(
-            [python, str(builder_cli), "compile-llm", "-y"],
-            cwd=str(kb_path),
-            capture_output=True, text=True, timeout=600,
-        )
-        return result.returncode == 0
+        from core.compiler import WikiCompiler
+        compiler = WikiCompiler(str(kb_path))
+        result = compiler.compile_with_llm(fallback=True)
+        print(f"[session_start] compile-llm: {result['concepts_total']} concepts, "
+              f"backend={result.get('backend', 'unknown')}")
+        return True
     except Exception as e:
         print(f"[session_start] Compile failed: {e}", file=sys.stderr)
         return False

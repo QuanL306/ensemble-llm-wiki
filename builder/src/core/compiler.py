@@ -468,5 +468,149 @@ class WikiCompiler:
         
         main_index = self.generate_main_index()
         results["main_index"] = main_index
-        
+
+        return results
+
+    def compile_with_llm(
+        self,
+        backend: Optional[str] = None,
+        model: Optional[str] = None,
+        fallback: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        Full LLM-powered compilation workflow.
+
+        Args:
+            backend: LLM backend name. Auto-detected if None.
+            model: Override default model.
+            fallback: If True and LLM fails, fall back to rule-based extraction.
+
+        Returns:
+            dict with results including concepts, summaries, tokens used.
+        """
+        from core.llm import compile_concepts, merge_concepts, list_available
+
+        results: Dict[str, Any] = {
+            "llm_enabled": False,
+            "backend": backend,
+            "summaries": [],
+            "concepts_total": 0,
+            "concept_articles": [],
+            "cross_refs": [],
+            "tokens": {"in": 0, "out": 0},
+            "errors": [],
+        }
+
+        available = list_available()
+        if not available:
+            print("[compiler] No LLM API keys found — falling back to rule-based")
+            if fallback:
+                return self.compile_all()
+            return results
+
+        if backend is None:
+            backend = available[0]
+        results["backend"] = backend
+        results["llm_enabled"] = True
+
+        print(f"[compiler] LLM compilation via {backend} ({model or 'default model'})")
+
+        completed_files = self.indexer.get_completed_files()
+        all_doc_concepts: List[Dict[str, Any]] = []
+
+        # ── Step 1: per-document concept extraction ──
+        for file_info in completed_files:
+            try:
+                file_id = self.indexer.generate_file_id(file_info["path"])
+
+                # Extract full text
+                wiki_path = file_info.get("wiki_path", "")
+                article_text = ""
+                if wiki_path:
+                    full_path = os.path.join(self.kb_path, wiki_path)
+                    if os.path.exists(full_path):
+                        article_text = read_text(full_path)
+
+                if not article_text:
+                    continue
+
+                article_name = file_info.get("name", os.path.basename(file_info.get("path", "?")))
+
+                print(f"[compiler]   extracting concepts from {article_name[:50]}...")
+                result = compile_concepts(article_text, article_name,
+                                          backend=backend, model=model)
+
+                results["tokens"]["in"] += result.get("_tokens", {}).get("in", 0)
+                results["tokens"]["out"] += result.get("_tokens", {}).get("out", 0)
+
+                concepts = result.get("concepts", [])
+                summary = result.get("summary", "")
+                topics = result.get("topics", [])
+
+                # Register concepts in concept_index
+                for concept in concepts:
+                    self.concept_index.add_concept(
+                        concept,
+                        file_path=file_info["path"],
+                        definition="",
+                    )
+
+                # Update file metadata with LLM enrichment
+                self.indexer.update_metadata(file_id, {
+                    "llm_summary": summary,
+                    "llm_topics": topics,
+                    "llm_backend": backend,
+                })
+
+                all_doc_concepts.append({
+                    "name": article_name,
+                    "concepts": concepts,
+                    "summary": summary,
+                    "topics": topics,
+                })
+
+                # Generate summary article
+                summary_path = self.compile_summary(file_id)
+                if summary_path:
+                    results["summaries"].append(summary_path)
+
+            except Exception as e:
+                results["errors"].append({
+                    "file": file_info.get("path", "unknown"),
+                    "error": str(e),
+                })
+
+        # ── Step 2: cross-document concept merging ──
+        if len(all_doc_concepts) >= 2:
+            print(f"[compiler]   merging concepts across {len(all_doc_concepts)} docs...")
+            try:
+                merged = merge_concepts(all_doc_concepts,
+                                        backend=backend, model=model)
+                # Register merged concepts as related
+                cross_refs = merged.get("cross_refs", [])
+                results["cross_refs"] = cross_refs
+
+                for ref in cross_refs:
+                    for concept in ref.get("shared", []):
+                        # Add cross-document relationship notes
+                        pass  # concept_index handles relationships via file_path
+
+                results["concepts_merged"] = len(merged.get("concepts", []))
+
+            except Exception as e:
+                print(f"[compiler] cross-doc merge failed: {e}", file=sys.stderr)
+
+        # ── Step 3: generate concept articles ──
+        concept_articles = self.generate_all_concept_articles()
+        results["concept_articles"] = concept_articles
+        results["concepts_total"] = len(self.concept_index.get_all_concepts())
+
+        # ── Step 4: main index ──
+        main_index = self.generate_main_index()
+        results["main_index"] = main_index
+
+        print(f"[compiler] ✅ {results['concepts_total']} concepts, "
+              f"{len(results['summaries'])} summaries, "
+              f"{results['tokens']['in']:,}/{results['tokens']['out']:,} tokens")
+
         return results

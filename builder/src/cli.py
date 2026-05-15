@@ -2138,13 +2138,20 @@ Examples:
   python src/cli.py compile-llm --docs                   # articles only
   python src/cli.py compile-llm --index                  # rebuild index only
   python src/cli.py compile-llm --concepts               # concept pages only
-  python src/cli.py compile-llm --full -y                # recompile everything, no prompt
+  python src/cli.py compile-llm --backend deepseek            # use DeepSeek
+  python src/cli.py compile-llm --backend openai --model gpt-4o-mini
 
 Environment:
-  LLM_PROVIDER        "claude" (default) or "kimi"
-  ANTHROPIC_API_KEY   required when LLM_PROVIDER=claude
-  KIMI_API_KEY        required when LLM_PROVIDER=kimi
+  Auto-detects backend from available API keys:
+    ANTHROPIC_API_KEY, OPENAI_API_KEY, DEEPSEEK_API_KEY,
+    MOONSHOT_API_KEY, ZHIPU_API_KEY, MINIMAX_API_KEY, GEMINI_API_KEY
+  LLM_PROVIDER  (deprecated) — use --backend instead
         """
+    )
+    compile_llm_parser.add_argument(
+        '--backend', default=None,
+        choices=['claude', 'openai', 'deepseek', 'kimi', 'zhipu', 'minimax', 'gemini'],
+        help='LLM backend (default: auto-detect from available API keys)'
     )
     compile_llm_parser.add_argument(
         '--model', default=None,
