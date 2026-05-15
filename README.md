@@ -74,7 +74,7 @@ The Builder wrappers (`skill_seekers.py`, `graphify_integration.py`) exist for h
 
 | Tool | Description |
 |------|-------------|
-| `kb_query` | Retrieval (TF-IDF + embedding hybrid) + Haiku synthesis |
+| `kb_query` | Retrieval (TF-IDF + embedding hybrid) + LLM synthesis |
 | `kb_search` | Keyword search with confidence tier + lifecycle display |
 | `kb_list_docs` | Browse with ★★★/★★☆/★☆☆ confidence + verified count |
 | `kb_get_document` | Full article with section extraction |
@@ -117,28 +117,22 @@ Role hierarchy: `write` also grants `read`. Only the owner can manage membership
 
 ```bash
 # 1. Build a knowledge base
-cd builder/src
-python cli.py init ~/my-kb --name "My KB"
-# Add files to ~/my-kb/raw/, then:
-python cli.py ingest && python cli.py compile-llm
+kb init ~/my-kb --name "My KB"
+cd ~/my-kb
+# Add files to raw/, then:
+kb ingest && kb compile-llm
 
-# 2. Run confidence + exports
-python -c "from core.confidence import *; from core.exports import *; ..."
+# 2. Harvest AI session transcripts into the KB
+kb harvest --since 7          # last 7 days of Claude Code sessions
+kb harvest --sources cursor   # Cursor sessions instead
+kb harvest --list             # show what's already imported
 
-# 3. Build knowledge graph (with edge provenance tagging)
-python core/graphify_integration.py --input ~/my-kb --project my-kb --jsonld
+# 3. Serve via MCP
+cd /path/to/knowledge-base-suite-en/local-server/src
+python3 server.py --kb-path /Users/yourname/my-kb
 
-# 4. Harvest AI session transcripts into the KB
-python cli.py harvest --since 7          # last 7 days of Claude Code sessions
-python cli.py harvest --sources cursor   # Cursor sessions instead
-python cli.py harvest --list             # show what's already imported
-
-# 5. Serve via MCP
-cd ../../local-server/src
-python server.py --kb-path ~/my-kb
-
-# 6. Auto-sync (SessionStart)
-python ../builder/src/core/session_start.py --kb-path ~/my-kb
+# 4. Auto-sync (SessionStart)
+python3 /path/to/knowledge-base-suite-en/builder/src/core/session_start.py --kb-path ~/my-kb
 ```
 
 ## Building from Local PDFs
@@ -157,26 +151,25 @@ Skill Seekers does structured extraction that the builder's raw PDF reader does 
 ### Case 1 — Prose PDFs (books, papers, reports)
 
 ```bash
-cd builder/src
-
 # Initialise a KB (skip if you already have one)
-python cli.py init ~/my-kb --name "Research Library"
+kb init ~/my-kb --name "Research Library"
+cd ~/my-kb
 
 # Copy your PDFs into the raw/ intake folder
-cp /path/to/your/pdfs/*.pdf ~/my-kb/raw/
+cp /path/to/your/pdfs/*.pdf raw/
 
 # Ingest: extract text + metadata from every file in raw/
-python cli.py ingest
+kb ingest
 
 # Compile: LLM writes wiki articles + builds search index + embeddings
-python cli.py compile-llm --docs
+kb compile-llm --docs
 ```
 
 Then serve it:
 
 ```bash
-cd ../../local-server/src
-python server.py --kb-path ~/my-kb
+cd /path/to/knowledge-base-suite-en/local-server/src
+python3 server.py --kb-path /Users/yourname/my-kb
 ```
 
 ---
@@ -186,18 +179,16 @@ python server.py --kb-path ~/my-kb
 Use the built-in `fetch` command, which runs Skill Seekers and auto-ingests the result in one step:
 
 ```bash
-cd builder/src
-
 # Initialise a KB (skip if you already have one)
-python cli.py init ~/my-kb --name "Tech Library"
+kb init ~/my-kb --name "Tech Library"
+cd ~/my-kb
 
 # Fetch + ingest each PDF via Skill Seekers
-# (repeat for every PDF you want to include)
-python cli.py fetch /path/to/your/pdfs/book.pdf
-python cli.py fetch /path/to/your/pdfs/paper.pdf
+kb fetch /path/to/your/pdfs/book.pdf
+kb fetch /path/to/your/pdfs/paper.pdf
 
 # Compile once all PDFs are fetched
-python cli.py compile-llm --docs
+kb compile-llm --docs
 ```
 
 Skill Seekers output lands in `~/my-kb/raw/skill_seekers/<slug>/` as structured Markdown. The `fetch` command ingests it automatically, so you go straight to compile when done.
@@ -205,23 +196,24 @@ Skill Seekers output lands in `~/my-kb/raw/skill_seekers/<slug>/` as structured 
 **Batch fetch a whole folder:**
 
 ```bash
+cd ~/my-kb
 for pdf in /path/to/your/pdfs/*.pdf; do
-    python cli.py fetch "$pdf"
+    kb fetch "$pdf"
 done
-python cli.py compile-llm --docs
+kb compile-llm --docs
 ```
 
 **Check what was fetched:**
 
 ```bash
-python cli.py fetch-list
+kb fetch-list
 ```
 
 Then serve:
 
 ```bash
-cd ../../local-server/src
-python server.py --kb-path ~/my-kb
+cd /path/to/knowledge-base-suite-en/local-server/src
+python3 server.py --kb-path /Users/yourname/my-kb
 ```
 
 ## Directory Structure
@@ -278,16 +270,16 @@ This creates a **knowledge growth loop**: each saved synthesis becomes a retriev
 Import your AI coding session history into the KB so it becomes searchable knowledge:
 
 ```bash
-cd builder/src
+cd ~/my-kb
 
 # Import Claude Code sessions from the last 30 days
-python cli.py harvest --since 30
+kb harvest --since 30
 
 # Import Cursor sessions too
-python cli.py harvest --sources claude-code,cursor --since 7
+kb harvest --sources claude-code,cursor --since 7
 
 # Show what's already been imported (manifest)
-python cli.py harvest --list
+kb harvest --list
 ```
 
 Sessions land in `raw/transcripts/<slug>.md` and flow through the normal ingest → compile pipeline. A manifest file (`.harvest_manifest.json`) deduplicates: re-running harvest only imports new sessions. Sensitive data (API keys, passwords, tokens) is scrubbed before writing.

@@ -6,7 +6,7 @@ Access your knowledge base via the MCP protocol in AI clients like Claude Deskto
 
 - MCP protocol over stdio transport
 - Compatible with Claude Desktop, Cursor, Cline, Continue.dev
-- **Inline synthesis**: `kb_query` returns a direct synthesised answer (when `ANTHROPIC_API_KEY` is set) plus source list — one tool call instead of three
+- **Inline synthesis**: `kb_query` returns a direct synthesised answer (when any LLM API key is set) plus source list — one tool call instead of three
 - **Chapter-level retrieval**: chunk scoring surfaces the most relevant section of a book, not just the book title
 - **Semantic-style scoring**: matches queries against LLM-generated retrieval sentences, not just raw keywords
 - **Write-back tools**: AI can file articles, notes, and index updates back into the wiki
@@ -17,30 +17,33 @@ Access your knowledge base via the MCP protocol in AI clients like Claude Deskto
 ### 1. Build a knowledge base first
 
 ```bash
-cd builder/src
-python cli.py init ~/my-research --name "My Research"
-# Add documents to ~/my-research/raw/, then:
-python cli.py ingest
-python cli.py compile-llm   # recommended; requires ANTHROPIC_API_KEY
+kb init ~/my-research --name "My Research"
+cd ~/my-research
+# Add documents to raw/, then:
+kb ingest
+kb compile-llm   # recommended; requires any LLM API key (see LLM API Key Setup in QUICKSTART.md)
 ```
 
 ### 2. Start the server
 
 ```bash
-cd local-server/src
-python server.py --kb-path ~/my-research
+cd /path/to/knowledge-base-suite-en/local-server/src
+python3 server.py --kb-path /Users/yourname/my-research
 ```
+
+> **Note:** Use the full absolute path for `--kb-path`. The `~/` shorthand is not
+> expanded when passed from JSON config files (Claude Desktop, Cursor, etc.).
 
 ### 3. Enable inline synthesis (optional)
 
-Set `ANTHROPIC_API_KEY` in the same environment where the server runs:
+Set any supported LLM API key in the same environment where the server runs:
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...
-python server.py --kb-path ~/my-research
+export DEEPSEEK_API_KEY=sk-...   # or OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.
+python3 server.py --kb-path /Users/yourname/my-research
 ```
 
-When the key is present, `kb_query` automatically synthesises a 2–4 sentence answer from the top-3 results using `claude-haiku-4-5` before returning the source list.
+When a key is present, `kb_query` automatically synthesises a 2–4 sentence answer from the top results using the auto-detected provider before returning the source list.
 
 ### 4. Configure your AI client
 
@@ -52,19 +55,22 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
 {
   "mcpServers": {
     "my-research": {
-      "command": "python",
+      "command": "python3",
       "args": [
-        "/path/to/local-server/src/server.py",
+        "/path/to/knowledge-base-suite-en/local-server/src/server.py",
         "--kb-path",
-        "/path/to/your/knowledge-base"
+        "/Users/yourname/my-research"
       ],
       "env": {
-        "ANTHROPIC_API_KEY": "sk-ant-..."
+        "DEEPSEEK_API_KEY": "sk-..."
       }
     }
   }
 }
 ```
+
+> Replace `DEEPSEEK_API_KEY` with whichever provider key you use.
+> All paths must be absolute — `~/` is not expanded in JSON configs.
 
 #### Cursor
 
@@ -74,8 +80,12 @@ Edit `~/.cursor/mcp.json`:
 {
   "mcpServers": {
     "my-kb": {
-      "command": "python",
-      "args": ["/path/to/local-server/src/server.py", "--kb-path", "~/my-research"]
+      "command": "python3",
+      "args": [
+        "/path/to/knowledge-base-suite-en/local-server/src/server.py",
+        "--kb-path",
+        "/Users/yourname/my-research"
+      ]
     }
   }
 }
@@ -87,8 +97,12 @@ Edit `~/.cursor/mcp.json`:
 {
   "cline.mcpServers": {
     "my-kb": {
-      "command": "python",
-      "args": ["/path/to/local-server/src/server.py", "--kb-path", "~/my-research"]
+      "command": "python3",
+      "args": [
+        "/path/to/knowledge-base-suite-en/local-server/src/server.py",
+        "--kb-path",
+        "/Users/yourname/my-research"
+      ]
     }
   }
 }
@@ -108,7 +122,7 @@ The primary tool. Ask a research question; get a synthesised answer plus source 
 { "name": "kb_query", "arguments": { "question": "How does sleep affect memory consolidation?" } }
 ```
 
-**Response (with `ANTHROPIC_API_KEY` set):**
+**Response (with any LLM API key set):**
 ```
 ## Answer
 
@@ -132,7 +146,7 @@ Relevance: 47
 ...
 ```
 
-**Without `ANTHROPIC_API_KEY`:** returns only the ranked source list with summaries.
+**Without an LLM API key:** returns only the ranked source list with summaries.
 
 **Scoring logic:**
 - Title: 5×
@@ -300,7 +314,7 @@ KnowledgeBaseMCPServer
     │
     ├── kb_query ──────── file_index.json (scoring)
     │                 └── wiki/_articles/*.md (snippets)
-    │                 └── claude-haiku-4-5 (synthesis, optional)
+    │                 └── LLM synthesis via any configured provider (optional)
     │
     ├── kb_get_summary ─── file_index.json (metadata)
     ├── kb_list_concepts ── concepts.json
@@ -322,7 +336,7 @@ KnowledgeBaseMCPServer
 | Server not starting | Check Python 3.9+; `pip install -r requirements.txt` |
 | AI not recognising tools | Verify JSON config syntax; restart client completely |
 | KB not found | `--kb-path` must point to directory containing `.kbaconfig` |
-| No synthesis in responses | Set `ANTHROPIC_API_KEY` in the server's environment |
+| No synthesis in responses | Set any LLM API key in the server's environment (see QUICKSTART.md) |
 | Search returns nothing | Run `compile-llm --docs` to generate retrieval queries |
 | Book results too generic | Run `compile-llm --docs`; chunking runs automatically |
 
@@ -332,12 +346,12 @@ KnowledgeBaseMCPServer
 {
   "mcpServers": {
     "research": {
-      "command": "python",
-      "args": ["server.py", "--kb-path", "~/research"]
+      "command": "python3",
+      "args": ["/path/to/local-server/src/server.py", "--kb-path", "/Users/yourname/research"]
     },
     "work": {
-      "command": "python",
-      "args": ["server.py", "--kb-path", "~/work-kb"]
+      "command": "python3",
+      "args": ["/path/to/local-server/src/server.py", "--kb-path", "/Users/yourname/work-kb"]
     }
   }
 }

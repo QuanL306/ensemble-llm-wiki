@@ -19,6 +19,9 @@ Thumbs.db
 .env
 graphify-out/
 wiki/graphify-out/
+# raw/ is excluded here so that if someone accidentally runs 'kb init .'
+# inside the cloned repo, their source documents don't get tracked.
+# Knowledge bases should be initialized outside this repo (e.g. ~/my-research).
 raw/
 
 # Cache
