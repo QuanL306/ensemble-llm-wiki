@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# kb — run the Knowledge Base CLI from any directory
+#
+# Usage:
+#   kb init ~/my-research --name "My Research"
+#   cd ~/my-research && kb ingest
+#   cd ~/my-research && kb compile-llm
+#
+# Add this script's directory to PATH to use 'kb' from anywhere:
+#   export PATH="$PATH:/path/to/knowledge-base-suite-en"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec python "$SCRIPT_DIR/builder/src/cli.py" "$@"

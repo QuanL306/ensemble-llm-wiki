@@ -1,23 +1,33 @@
-# knowledge-base-suite-en — ensemble LLM wiki builder
+# knowledge-base-suite-en — full dependency list
 # Install: pip install -r requirements.txt
 
-# PDF document parsing (text-based)
+# Core
+PyYAML>=6.0
+python-dateutil>=2.8.0
+
+# PDF processing (text-based)
 PyMuPDF>=1.23.0
 
 # PDF OCR (scanned documents)
-pytesseract>=0.3
-Pillow>=10.0
+pytesseract>=0.3.10
+Pillow>=10.0.0
+pdf2image>=1.16.0
 
 # EPUB ebooks
 EbookLib>=0.18
-beautifulsoup4>=4.12
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
 
 # Chinese NLP (word segmentation + POS tagging for concept extraction)
 # Only needed when building Chinese-language knowledge bases.
-# English-only users can safely skip: pip install -r requirements.txt --ignore-requires-python
-# or just comment this line out before installing.
+# English-only users can comment this line out before installing.
 jieba>=0.42
 
 # Knowledge graph generation (https://github.com/safishamsi/graphify)
 # Installs networkx, scipy, datasketch, rapidfuzz as sub-dependencies
 graphifyy>=0.8.0
+
+# Skill Seekers integration (optional — for `kb fetch` command)
+# Basic install:  pip install skill-seekers
+# Full install:   pip install skill-seekers[all]
+# skill-seekers>=3.5.0

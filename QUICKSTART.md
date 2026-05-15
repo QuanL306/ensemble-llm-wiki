@@ -10,19 +10,29 @@ Get up and running with Knowledge Base Suite in minutes.
 ## Installation
 
 ```bash
-# Install Builder dependencies (required)
-pip install -r builder/requirements.txt
+git clone https://github.com/QuanL306/ensemble-llm-wiki.git
+cd ensemble-llm-wiki
 
-# Install Local Server dependencies (optional)
-pip install -r local-server/requirements.txt
+# Install all dependencies
+pip install -r requirements.txt
 
-# Install Cloud Platform dependencies (optional)
-pip install -r cloud_platform/requirements.txt
+# Add the repo to your PATH so the 'kb' command works from any directory
+# macOS / Linux — add to ~/.zshrc or ~/.bashrc:
+export PATH="$PATH:$(pwd)"
 
-# Install Skill Seekers for web/GitHub/video ingestion (optional)
-pip install skill-seekers          # basic
-pip install skill-seekers[all]     # full (video, async, all platforms)
+# Windows — add the cloned folder to your system PATH, or run kb.bat directly
+
+# Optional extras
+pip install -r local-server/requirements.txt    # local MCP server
+pip install -r cloud_platform/requirements.txt  # cloud platform
+pip install skill-seekers                       # web/GitHub/video ingestion (basic)
+pip install skill-seekers[all]                  # full (video, async, all platforms)
 ```
+
+> **Note for English-only users:** `requirements.txt` includes `jieba`, a Chinese NLP
+> library used for Chinese-language knowledge bases. If you don't need it, comment out
+> the `jieba` line before running `pip install`.
+
 
 ## LLM API Key Setup
 
@@ -55,23 +65,24 @@ export GEMINI_API_KEY=AIza...
 ### Scenario 1: Build a Knowledge Base from Local Files
 
 ```bash
-cd builder/src
+# Initialize (run from anywhere)
+kb init ~/my-research --name "My Research"
 
-# Initialize
-python cli.py init ~/my-research --name "My Research"
+# All subsequent commands run from inside the KB directory
+cd ~/my-research
 
 # Drop PDFs, EPUBs, Markdown files into raw/
-cp ~/Downloads/*.pdf ~/my-research/raw/
+cp ~/Downloads/*.pdf raw/
 
 # Ingest: extract and index all documents
-python cli.py ingest
+kb ingest
 
 # Compile Option A — LLM-driven (recommended, requires any LLM API key)
 export DEEPSEEK_API_KEY=sk-...      # or OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.
-python cli.py compile-llm           # writes real wiki articles via LLM
+kb compile-llm                      # writes real wiki articles via LLM
 
 # Compile Option B — regex-based (no API key, fast structural scaffold)
-python cli.py compile
+kb compile
 
 # Open ~/my-research in Obsidian to explore
 ```
@@ -79,22 +90,21 @@ python cli.py compile
 ### Scenario 2: Fetch Knowledge from the Web (Skill Seekers)
 
 ```bash
-cd builder/src
-python cli.py init ~/tech-kb --name "Tech KB"
+kb init ~/tech-kb --name "Tech KB"
 cd ~/tech-kb
 
 # Fetch from documentation sites
-python cli.py fetch https://fastapi.tiangolo.com/
-python cli.py fetch https://docs.langchain.com/ --async
+kb fetch https://fastapi.tiangolo.com/
+kb fetch https://docs.langchain.com/ --async
 
 # Fetch from GitHub repositories
-python cli.py fetch tiangolo/fastapi --name fastapi-source
+kb fetch tiangolo/fastapi --name fastapi-source
 
 # Fetch and compile in one step
-python cli.py fetch https://docs.django.com/ --compile
+kb fetch https://docs.django.com/ --compile
 
 # Check what you've fetched
-python cli.py fetch-list
+kb fetch-list
 ```
 
 ### Scenario 3: LLM-Driven Wiki Compilation
@@ -108,19 +118,19 @@ export DEEPSEEK_API_KEY=sk-...      # or any other supported key
 cd ~/my-research
 
 # Full pipeline (articles → index → concept pages)
-python src/cli.py compile-llm
+kb compile-llm
 
 # Run individual steps
-python src/cli.py compile-llm --docs       # article per document
-python src/cli.py compile-llm --index      # rebuild _index.md
-python src/cli.py compile-llm --concepts   # concept pages for [[links]]
+kb compile-llm --docs       # article per document
+kb compile-llm --index      # rebuild _index.md
+kb compile-llm --concepts   # concept pages for [[links]]
 
 # Force recompile all (even already-compiled documents)
-python src/cli.py compile-llm --full -y
+kb compile-llm --full -y
 
 # Use a specific model (overrides provider default)
-python src/cli.py compile-llm --model gpt-4o
-python src/cli.py compile-llm --model claude-opus-4-7
+kb compile-llm --model gpt-4o
+kb compile-llm --model claude-opus-4-7
 ```
 
 ### Scenario 4: AI-Powered Research Assistant (Local MCP)
@@ -128,9 +138,10 @@ python src/cli.py compile-llm --model claude-opus-4-7
 ```bash
 # 1. Build your knowledge base (Scenarios 1–3)
 
-# 2. Start the local MCP server
+# 2. Start the local MCP server (from the cloned repo)
 cd local-server/src
-python server.py --kb-path ~/my-research
+python server.py --kb-path ~/my-research    # single KB
+python server.py --kb-root ~/knowledge-bases # or point at a folder of KBs
 
 # 3. Configure Claude Desktop: add to claude_desktop_config.json
 # {
@@ -154,7 +165,7 @@ docker-compose up -d
 
 # 3. Deploy your wiki to the server
 cd ~/my-research
-python src/cli.py deploy --host myserver.com --remote-user alice
+kb deploy --host myserver.com --remote-user alice
 
 # 4. Team members access via API
 curl -X POST http://myserver.com:8000/mcp/v1/tools/call \
@@ -168,52 +179,52 @@ curl -X POST http://myserver.com:8000/mcp/v1/tools/call \
 ### Daily Research Workflow
 
 ```bash
-cd builder/src
+cd ~/my-kb
 
-# Add new papers → ~/my-kb/raw/
+# Add new papers → raw/
 # Incrementally ingest only new files
-python cli.py ingest
+kb ingest
 
 # LLM-compile new documents (skips already-compiled ones)
-python cli.py compile-llm --docs
+kb compile-llm --docs
 
 # Check health
-python cli.py lint
+kb lint
 
 # Check status and LLM coverage
-python cli.py status
+kb status
 ```
 
 ### Maintenance Workflow
 
 ```bash
-cd builder/src
+cd ~/my-kb
 
 # Remove source files you deleted from raw/
-python cli.py clean --dry-run     # preview first
-python cli.py clean               # apply
+kb clean --dry-run     # preview first
+kb clean               # apply
 
 # Check wiki health
-python cli.py lint                # orphan links, missing sections, stale articles
+kb lint                # orphan links, missing sections, stale articles
 
 # Test search without starting the server
-python cli.py search "transformer attention mechanism"
-python cli.py search "RLHF" --limit 10
+kb search "transformer attention mechanism"
+kb search "RLHF" --limit 10
 ```
 
 ### Deploy Workflow
 
 ```bash
-cd builder/src
+cd ~/my-research
 
 # Preview what would be synced
-python cli.py deploy --host myserver.com --remote-user alice --dry-run
+kb deploy --host myserver.com --remote-user alice --dry-run
 
 # Deploy quietly (summary only, no file-by-file output)
-python cli.py deploy --host myserver.com --remote-user alice --quiet
+kb deploy --host myserver.com --remote-user alice --quiet
 
 # Full verbose deploy with custom SSH key
-python cli.py deploy \
+kb deploy \
   --host myserver.com \
   --remote-user alice \
   --kb-id my-research \
@@ -223,12 +234,12 @@ python cli.py deploy \
 ### Fetch + Build Workflow (with Skill Seekers)
 
 ```bash
-cd builder/src
+cd ~/my-kb
 
 # Fetch knowledge from any source
-python cli.py fetch https://docs.python.org/3/
-python cli.py fetch openai/openai-python
-python cli.py fetch https://www.youtube.com/watch?v=...
+kb fetch https://docs.python.org/3/
+kb fetch openai/openai-python
+kb fetch https://www.youtube.com/watch?v=...
 
 # All fetched content lands in raw/skill_seekers/
 # Normal ingest + compile follows automatically

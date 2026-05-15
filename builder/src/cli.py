@@ -158,12 +158,13 @@ See project documentation for more details.
     write_text(os.path.join(folder_path, "README.md"), readme_content)
     print(f"  📝 Created: README.md")
     
+    _cli = os.path.abspath(__file__)
     print(f"\n✅ Knowledge Base initialized!")
     print(f"\nNext steps:")
     print(f"  1. cd {folder_path}")
     print(f"  2. Put documents into raw/ directory")
-    print(f"  3. Run: python src/cli.py ingest")
-    print(f"  4. Run: python src/cli.py compile")
+    print(f"  3. python {_cli} ingest")
+    print(f"  4. python {_cli} compile-llm")
 
 
 def cmd_ingest(args):
