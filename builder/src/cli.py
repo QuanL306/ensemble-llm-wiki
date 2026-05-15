@@ -75,6 +75,7 @@ def cmd_init(args):
     dirs = [
         os.path.join(folder_path, "raw"),
         os.path.join(folder_path, "raw", "articles"),
+        os.path.join(folder_path, "raw", "books"),
         os.path.join(folder_path, "raw", "papers"),
         os.path.join(folder_path, "raw", "images"),
         os.path.join(folder_path, "raw", "web_clips"),
@@ -116,9 +117,21 @@ A knowledge base managed by Knowledge Base Builder Agent.
 
 ## Directory Structure
 
-- `raw/` - Source documents
+- `raw/` - Source documents (drop files here before ingesting)
+  - `articles/` - Blog posts, essays, standalone web articles
+  - `books/` - EPUBs, PDFs of full-length books
+  - `papers/` - Academic papers, research reports, whitepapers
+  - `images/` - Standalone image files (embedded images in PDFs/EPUBs are handled automatically)
+  - `web_clips/` - Saved web pages, HTML exports, browser clippings
 - `wiki/` - Compiled knowledge base (Obsidian compatible)
 - `outputs/` - Query outputs
+
+### Notes on `raw/`
+
+- Subfolders are organizational only — the ingest pipeline scans all of `raw/` recursively, so file placement does not affect processing.
+- Supported formats: PDF, EPUB, Markdown (`.md`), plain text (`.txt`).
+- Your originals are never modified or deleted. All processed output goes into `wiki/`.
+- You can add your own subfolders freely; they will be picked up automatically.
 
 ## Dependencies
 
