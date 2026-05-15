@@ -52,6 +52,7 @@ CORS_ORIGINS: list[str] = [o.strip() for o in _cors_env.split(",") if o.strip()]
 RATE_LIMIT_WINDOW = 60   # seconds per window
 RATE_LIMIT_DEFAULT = 100  # requests per window
 REGISTER_RATE_LIMIT = 5  # max registrations per IP per minute
+JWT_MEMBER_RATE_LIMIT = 30  # member-management calls per minute per user (JWT routes)
 
 # Redis client
 redis_client: Optional[redis.Redis] = None
@@ -798,6 +799,10 @@ async def add_kb_member(
     Add or update a member on the caller's KB.
     Looks up the member's user_id by email in Redis, then calls the MCP server.
     """
+    owner_id = user["sub"]
+    if not await check_rate_limit(f"jwt_member:{owner_id}", JWT_MEMBER_RATE_LIMIT):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
     if data.role not in ("read", "write"):
         raise HTTPException(status_code=400, detail="role must be 'read' or 'write'")
 
@@ -811,7 +816,6 @@ async def add_kb_member(
     if not member_data:
         raise HTTPException(status_code=404, detail="No user registered with that email")
 
-    owner_id = user["sub"]
     member_user_id = member_data["user_id"]
 
     if _http_client is None:
@@ -848,6 +852,10 @@ async def remove_kb_member(
     Remove a member from the caller's KB.
     Looks up the member's user_id by email in Redis, then calls the MCP server.
     """
+    owner_id = user["sub"]
+    if not await check_rate_limit(f"jwt_member:{owner_id}", JWT_MEMBER_RATE_LIMIT):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
     email = member_email.lower().strip()
     try:
         member_data = await redis_client.hgetall(f"user_account:{email}")
@@ -858,7 +866,6 @@ async def remove_kb_member(
     if not member_data:
         raise HTTPException(status_code=404, detail="No user registered with that email")
 
-    owner_id = user["sub"]
     member_user_id = member_data["user_id"]
 
     if _http_client is None:

@@ -19,6 +19,35 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import List, Optional
 
+# ---------------------------------------------------------------------------
+# Sensitive-data scrubbing
+# ---------------------------------------------------------------------------
+
+# Each entry is (compiled_pattern, replacement_string).
+# Replacement strings may reference capture groups with \1, \2, etc.
+_SCRUB_PATTERNS = [
+    # password / secret / token = <value>
+    (re.compile(
+        r'(?i)((?:password|passwd|pwd|secret|token|api[-_]?key|auth[-_]?token'
+        r'|access[-_]?key|private[-_]?key|client[-_]?secret)\s*[:=]\s*)\S+',
+    ), r'\1[REDACTED]'),
+    # OpenAI / Anthropic sk-... keys
+    (re.compile(r'\bsk-[A-Za-z0-9\-_]{20,}'), r'sk-[REDACTED]'),
+    # AWS IAM access keys
+    (re.compile(r'\bAKIA[A-Z0-9]{16}\b'), r'AKIA[REDACTED]'),
+    # GitHub personal access tokens
+    (re.compile(r'\bghp_[A-Za-z0-9]{36}\b'), r'ghp_[REDACTED]'),
+    # Bearer tokens in Authorization headers
+    (re.compile(r'(?i)(Bearer\s+)[A-Za-z0-9\-._~+/]{20,}'), r'\1[REDACTED]'),
+]
+
+
+def _scrub_sensitive(text: str) -> str:
+    """Replace common credential patterns with [REDACTED] placeholders."""
+    for pattern, repl in _SCRUB_PATTERNS:
+        text = pattern.sub(repl, text)
+    return text
+
 
 # ---------------------------------------------------------------------------
 # Data model
@@ -261,11 +290,11 @@ def session_to_markdown(session: Session) -> str:
         lines += [
             "## User",
             "",
-            ex.user.strip(),
+            _scrub_sensitive(ex.user.strip()),
             "",
             "## Assistant",
             "",
-            _truncate(ex.assistant.strip()),
+            _truncate(_scrub_sensitive(ex.assistant.strip())),
             "",
             "---",
             "",

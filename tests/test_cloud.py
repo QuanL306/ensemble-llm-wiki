@@ -396,3 +396,150 @@ class TestSearchScoring:
         assert "Sleep" in top_name or "sleep" in top_name.lower(), (
             f"Expected sleep-related doc at top. Got: {top_name}"
         )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Group 5: Shared-KB cache invalidation
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestSharedKbsCache:
+    """
+    list_shared_kbs must:
+    - cache results (second call is faster / same result)
+    - invalidate for the affected member when add_kb_member is called
+    - invalidate for the affected member when remove_kb_member is called
+    """
+
+    def _make_kb(self, base_path, owner_id, kb_id, members=None):
+        import yaml
+        kb_root = base_path / owner_id / kb_id
+        kb_root.mkdir(parents=True, exist_ok=True)
+        config = {"name": kb_id, "version": "1.0", "owner": owner_id, "members": members or []}
+        (kb_root / ".kbaconfig").write_text(yaml.safe_dump(config))
+        return kb_root
+
+    def test_cache_is_populated_on_first_call(self, tmp_path):
+        self._make_kb(tmp_path, "alice", "research",
+                      members=[{"user_id": "bob", "role": "read"}])
+        mgr = cloud.KnowledgeBaseManager(str(tmp_path))
+        r1 = mgr.list_shared_kbs("bob")
+        r2 = mgr.list_shared_kbs("bob")
+        assert r1 == r2
+        assert any(kb["id"] == "research" for kb in r1)
+
+    def test_cache_invalidated_after_add_member(self, tmp_path):
+        """Adding bob to a KB clears bob's shared-KB cache entry."""
+        import mcp_http_server as cloud_mod
+        self._make_kb(tmp_path, "alice", "research")
+
+        orig = cloud.kb_manager.base_path
+        cloud.kb_manager.base_path = tmp_path
+        try:
+            # Warm up cache with empty result (bob not yet a member)
+            result_before = cloud.kb_manager.list_shared_kbs("bob")
+            assert result_before == []
+
+            # Add bob via endpoint
+            from fastapi.testclient import TestClient
+            client = TestClient(cloud.app)
+            resp = client.post(
+                "/api/v1/knowledge-bases/members",
+                headers={"X-User-ID": "alice", "X-KB-ID": "research"},
+                json={"member_user_id": "bob", "role": "read"},
+            )
+            assert resp.status_code == 200
+
+            # Cache should be invalidated — next call rescans and finds bob
+            result_after = cloud.kb_manager.list_shared_kbs("bob")
+            assert any(kb["id"] == "research" for kb in result_after)
+        finally:
+            cloud.kb_manager.base_path = orig
+
+    def test_cache_invalidated_after_remove_member(self, tmp_path):
+        """Removing bob from a KB clears bob's shared-KB cache entry."""
+        import yaml
+        self._make_kb(tmp_path, "alice", "research",
+                      members=[{"user_id": "bob", "role": "read"}])
+
+        orig = cloud.kb_manager.base_path
+        cloud.kb_manager.base_path = tmp_path
+        try:
+            # Warm up cache
+            result_before = cloud.kb_manager.list_shared_kbs("bob")
+            assert any(kb["id"] == "research" for kb in result_before)
+
+            from fastapi.testclient import TestClient
+            client = TestClient(cloud.app)
+            resp = client.delete(
+                "/api/v1/knowledge-bases/members/bob",
+                headers={"X-User-ID": "alice", "X-KB-ID": "research"},
+            )
+            assert resp.status_code == 200
+
+            # Cache invalidated — rescan returns empty
+            result_after = cloud.kb_manager.list_shared_kbs("bob")
+            assert not any(kb["id"] == "research" for kb in result_after)
+        finally:
+            cloud.kb_manager.base_path = orig
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Group 6: Owner field auto-migration
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestOwnerFieldMigration:
+    """
+    Old KBs (no owner field in .kbaconfig) must be migrated transparently
+    the first time a member is added or removed by the owner.
+    """
+
+    def _make_legacy_kb(self, base_path, user_id, kb_id):
+        """Create a KB with no owner field — simulates a pre-migration KB."""
+        kb_root = base_path / user_id / kb_id
+        kb_root.mkdir(parents=True, exist_ok=True)
+        # Intentionally no 'owner' field
+        (kb_root / ".kbaconfig").write_text(f"name: {kb_id}\nversion: '1.0'\n")
+        return kb_root
+
+    def test_add_member_migrates_owner_field(self, tmp_path):
+        import yaml
+        from fastapi.testclient import TestClient
+
+        self._make_legacy_kb(tmp_path, "alice", "legacy-kb")
+        orig = cloud.kb_manager.base_path
+        cloud.kb_manager.base_path = tmp_path
+        try:
+            client = TestClient(cloud.app)
+            resp = client.post(
+                "/api/v1/knowledge-bases/members",
+                headers={"X-User-ID": "alice", "X-KB-ID": "legacy-kb"},
+                json={"member_user_id": "bob", "role": "read"},
+            )
+            assert resp.status_code == 200
+
+            config = yaml.safe_load(
+                (tmp_path / "alice" / "legacy-kb" / ".kbaconfig").read_text()
+            )
+            assert config.get("owner") == "alice", (
+                f"owner field should be written on first member add. Got: {config}"
+            )
+        finally:
+            cloud.kb_manager.base_path = orig
+
+    def test_add_member_legacy_kb_allows_owner(self, tmp_path):
+        """Owner (derived from path) must be allowed to add members to a legacy KB."""
+        from fastapi.testclient import TestClient
+
+        self._make_legacy_kb(tmp_path, "alice", "legacy-kb")
+        orig = cloud.kb_manager.base_path
+        cloud.kb_manager.base_path = tmp_path
+        try:
+            client = TestClient(cloud.app)
+            resp = client.post(
+                "/api/v1/knowledge-bases/members",
+                headers={"X-User-ID": "alice", "X-KB-ID": "legacy-kb"},
+                json={"member_user_id": "carol", "role": "write"},
+            )
+            assert resp.status_code == 200
+        finally:
+            cloud.kb_manager.base_path = orig

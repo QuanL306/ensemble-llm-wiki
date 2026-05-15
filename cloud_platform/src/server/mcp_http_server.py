@@ -128,6 +128,8 @@ def _warn_schema(index: dict, user_id: str, kb_id: str) -> None:
 
 import threading
 
+_SHARED_KBS_TTL = 60.0
+
 _embed_model = None
 _embed_model_lock = threading.Lock()
 
@@ -192,6 +194,8 @@ class KnowledgeBaseManager:
     def __init__(self, base_path: str = "/data/knowledge-bases"):
         self.base_path = Path(base_path)
         self.base_path.mkdir(parents=True, exist_ok=True)
+        # Shared-KB scan cache: requester_id -> (timestamp, results)
+        self._shared_kbs_cache: dict = {}
     
     def get_kb_path(self, user_id: str, kb_id: str) -> Path:
         """Get the filesystem path for a user's knowledge base"""
@@ -224,30 +228,47 @@ class KnowledgeBaseManager:
         return False
 
     def list_shared_kbs(self, requester_id: str) -> list:
-        """Scan all KBs and return those where requester_id is a member (not owner)."""
+        """Scan all KBs and return those where requester_id is a member (not owner).
+
+        Results are cached per requester for _SHARED_KBS_TTL seconds to avoid
+        a full filesystem scan on every list call.
+        """
+        cached = self._shared_kbs_cache.get(requester_id)
+        if cached and (time.time() - cached[0]) < _SHARED_KBS_TTL:
+            return cached[1]
+
         results = []
-        for user_dir in self.base_path.iterdir():
-            if not user_dir.is_dir():
-                continue
-            owner_id = user_dir.name
-            if owner_id == requester_id:
-                continue
-            for kb_dir in user_dir.iterdir():
-                if not (kb_dir.is_dir() and (kb_dir / ".kbaconfig").exists()):
+        try:
+            for user_dir in self.base_path.iterdir():
+                if not user_dir.is_dir():
                     continue
-                config = self._load_config(kb_dir)
-                for m in config.get("members", []):
-                    if m.get("user_id") == requester_id:
-                        stats = self._get_kb_stats(kb_dir)
-                        results.append({
-                            "id": kb_dir.name,
-                            "owner_id": owner_id,
-                            "name": config.get("name", kb_dir.name),
-                            "role": m.get("role", "read"),
-                            "stats": stats,
-                        })
-                        break
+                owner_id = user_dir.name
+                if owner_id == requester_id:
+                    continue
+                for kb_dir in user_dir.iterdir():
+                    if not (kb_dir.is_dir() and (kb_dir / ".kbaconfig").exists()):
+                        continue
+                    config = self._load_config(kb_dir)
+                    for m in config.get("members", []):
+                        if m.get("user_id") == requester_id:
+                            stats = self._get_kb_stats(kb_dir)
+                            results.append({
+                                "id": kb_dir.name,
+                                "owner_id": owner_id,
+                                "name": config.get("name", kb_dir.name),
+                                "role": m.get("role", "read"),
+                                "stats": stats,
+                            })
+                            break
+        except OSError:
+            pass  # base_path not accessible — return partial results
+
+        self._shared_kbs_cache[requester_id] = (time.time(), results)
         return results
+
+    def _invalidate_shared_kbs_cache(self, member_user_id: str) -> None:
+        """Drop the cached shared-KB list for a user whose membership changed."""
+        self._shared_kbs_cache.pop(member_user_id, None)
 
     def list_knowledge_bases(self, user_id: str) -> List[Dict]:
         """List all knowledge bases belonging to a user"""
@@ -1581,6 +1602,7 @@ async def add_kb_member(request: Request):
     config = kb_manager.get_kb_config(user_id, kb_id)
     if config.get("owner", user_id) != user_id:
         raise HTTPException(status_code=403, detail="Only the KB owner can manage members")
+    config.setdefault("owner", user_id)  # migrate old KBs that predate this field
 
     members = config.get("members", []) or []
     updated = False
@@ -1600,6 +1622,7 @@ async def add_kb_member(request: Request):
         log.error("add_kb_member_write_failed", extra={"error": str(exc)})
         raise HTTPException(status_code=500, detail="Failed to update KB config")
 
+    kb_manager._invalidate_shared_kbs_cache(member_user_id)
     return {"kb_id": kb_id, "member_user_id": member_user_id, "role": role,
             "action": "updated" if updated else "added"}
 
@@ -1627,6 +1650,7 @@ async def remove_kb_member(member_user_id: str, request: Request):
     config = kb_manager.get_kb_config(user_id, kb_id)
     if config.get("owner", user_id) != user_id:
         raise HTTPException(status_code=403, detail="Only the KB owner can manage members")
+    config.setdefault("owner", user_id)  # migrate old KBs that predate this field
 
     members = config.get("members", []) or []
     new_members = [m for m in members if m.get("user_id") != safe_member]
@@ -1641,6 +1665,7 @@ async def remove_kb_member(member_user_id: str, request: Request):
         log.error("remove_kb_member_write_failed", extra={"error": str(exc)})
         raise HTTPException(status_code=500, detail="Failed to update KB config")
 
+    kb_manager._invalidate_shared_kbs_cache(safe_member)
     return {"kb_id": kb_id, "member_user_id": safe_member, "action": "removed"}
 
 

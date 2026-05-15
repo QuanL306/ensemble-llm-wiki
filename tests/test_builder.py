@@ -242,3 +242,81 @@ class TestCompileWithRetry:
 
         assert result is None
         assert isinstance(error, str) and len(error) > 0
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Group 4: _scrub_sensitive — transcript privacy scrubbing
+# ═══════════════════════════════════════════════════════════════════════════
+
+import importlib.util as _ilu
+import os as _os
+
+def _load_harvester():
+    path = _os.path.abspath(_os.path.join(
+        _os.path.dirname(__file__), "..", "builder", "src", "core", "transcript_harvester.py"
+    ))
+    spec = _ilu.spec_from_file_location("transcript_harvester", path)
+    mod = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+_harvester = _load_harvester()
+
+
+class TestScrubSensitive:
+    """_scrub_sensitive must redact common credential patterns."""
+
+    def test_password_eq_value_is_redacted(self):
+        out = _harvester._scrub_sensitive("password=hunter2")
+        assert "hunter2" not in out
+        assert "[REDACTED]" in out
+
+    def test_password_colon_value_is_redacted(self):
+        out = _harvester._scrub_sensitive("password: mysecret")
+        assert "mysecret" not in out
+
+    def test_token_eq_value_is_redacted(self):
+        out = _harvester._scrub_sensitive("token=eyJhbGciOiJIUzI1NiJ9.abc123")
+        assert "eyJhbGciOiJIUzI1NiJ9" not in out
+
+    def test_openai_key_is_redacted(self):
+        out = _harvester._scrub_sensitive("key is sk-abcdefghij1234567890ABCDEF")
+        assert "sk-abcdefghij" not in out
+        assert "sk-[REDACTED]" in out
+
+    def test_aws_key_is_redacted(self):
+        out = _harvester._scrub_sensitive("AKIAIOSFODNN7EXAMPLE is the key")
+        assert "AKIAIOSFODNN7EXAMPLE" not in out
+        assert "AKIA[REDACTED]" in out
+
+    def test_github_token_is_redacted(self):
+        tok = "ghp_" + "A" * 36
+        out = _harvester._scrub_sensitive(f"token={tok}")
+        assert tok not in out
+
+    def test_bearer_token_is_redacted(self):
+        out = _harvester._scrub_sensitive("Authorization: Bearer eyJsomeLongToken1234567890")
+        assert "eyJsomeLongToken" not in out
+        assert "[REDACTED]" in out
+
+    def test_plain_text_unchanged(self):
+        text = "The quick brown fox jumps over the lazy dog."
+        assert _harvester._scrub_sensitive(text) == text
+
+    def test_scrub_applied_in_session_to_markdown(self, tmp_path):
+        """session_to_markdown must scrub both user and assistant text."""
+        from datetime import date
+        session = _harvester.Session(
+            slug="test-session",
+            source="claude-code",
+            exchanges=[
+                _harvester.Exchange(
+                    user="my password=topsecret123",
+                    assistant="here is sk-abc123defghijklmnopqrstuv",
+                )
+            ],
+        )
+        md = _harvester.session_to_markdown(session)
+        assert "topsecret123" not in md
+        assert "sk-abc123defghijklmnopqrstuv" not in md
+        assert "[REDACTED]" in md
