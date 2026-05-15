@@ -227,6 +227,59 @@ class KnowledgeBaseMCPServer:
             return {}
         return data.get("concepts", {})
 
+    def _load_syntheses(self, kb_path: Path) -> dict:
+        """Load saved syntheses from wiki/syntheses/ as pseudo index entries."""
+        syntheses_dir = kb_path / "wiki" / "syntheses"
+        if not syntheses_dir.exists():
+            return {}
+        entries = {}
+        for f in syntheses_dir.glob("*.md"):
+            try:
+                text = f.read_text(encoding="utf-8")
+                # Parse frontmatter question field
+                question = ""
+                body_lines = []
+                in_frontmatter = False
+                past_frontmatter = False
+                for line in text.splitlines():
+                    if line.strip() == "---":
+                        if not past_frontmatter:
+                            in_frontmatter = not in_frontmatter
+                            if not in_frontmatter:
+                                past_frontmatter = True
+                        continue
+                    if in_frontmatter:
+                        if line.startswith("question:"):
+                            question = line[len("question:"):].strip()
+                    elif past_frontmatter:
+                        body_lines.append(line)
+                body = "\n".join(body_lines).strip()
+                # Strip trailing sources line
+                if body.endswith("*"):
+                    body = body[:body.rfind("\n---\n")].strip()
+                name = question or f.stem
+                file_id = f"synthesis::{f.stem}"
+                entries[file_id] = {
+                    "name": name,
+                    "wiki_path": str(f.relative_to(kb_path)),
+                    "extracted_metadata": {
+                        "core_claims": [name],
+                        "key_data": [],
+                        "quotes": [],
+                    },
+                    "llm_metadata": {
+                        "summary": body[:500],
+                        "core_arguments": body,
+                        "llm_body_search": body.lower(),
+                    },
+                    "retrieval_queries": [name],
+                    "chunks": [],
+                    "_is_synthesis": True,
+                }
+            except Exception:
+                continue
+        return entries
+
     def _get_embed_model(self):
         if self._embed_model is None:
             try:
@@ -871,7 +924,7 @@ class KnowledgeBaseMCPServer:
             index = self._safe_load_index(kb_path)
             if index is None:
                 continue
-            all_files = index.get("files", {})
+            all_files = {**index.get("files", {}), **self._load_syntheses(kb_path)}
             concepts_data = self._load_concepts(kb_path)
             embeddings = self._load_embeddings(kb_path)
             results_map: dict = {}
