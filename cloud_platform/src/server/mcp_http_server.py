@@ -1307,6 +1307,61 @@ async def list_knowledge_bases(request: Request):
     return {"knowledge_bases": kbs}
 
 
+@app.post("/api/v1/knowledge-bases")
+async def provision_knowledge_base(request: Request):
+    """
+    Provision a new knowledge base directory for a user.
+    Called by the gateway immediately after successful user registration.
+    Idempotent: returns 200 if the KB already exists.
+    """
+    user_id = _sanitize_id(request.headers.get("X-User-ID", ""))
+    if not user_id:
+        raise HTTPException(status_code=400, detail="X-User-ID header required")
+
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    kb_id = _sanitize_id(body.get("kb_id", "default") or "default")
+
+    kb_path = kb_manager.get_kb_path(user_id, kb_id)
+    already_exists = kb_manager.kb_exists(user_id, kb_id)
+
+    if not already_exists:
+        try:
+            for sub in [
+                kb_path / "raw",
+                kb_path / "wiki" / "_articles",
+                kb_path / "wiki" / "_concepts",
+                kb_path / "wiki" / "_topics",
+                kb_path / "wiki" / "_meta",
+                kb_path / "outputs",
+            ]:
+                sub.mkdir(parents=True, exist_ok=True)
+
+            (kb_path / ".kbaconfig").write_text(
+                f"name: {kb_id}\nversion: '1.0'\n", encoding="utf-8"
+            )
+            log.info(
+                "kb_provisioned",
+                extra={"user_id": user_id, "kb_id": kb_id},
+            )
+        except OSError as exc:
+            log.error(
+                "kb_provision_failed",
+                extra={"user_id": user_id, "kb_id": kb_id, "error": str(exc)},
+            )
+            raise HTTPException(status_code=500, detail="Failed to provision knowledge base")
+
+    return {
+        "user_id": user_id,
+        "kb_id": kb_id,
+        "status": "exists" if already_exists else "created",
+        "path": str(kb_path),
+    }
+
+
 @app.get("/health")
 async def health():
     """Health check — verifies filesystem is writable."""

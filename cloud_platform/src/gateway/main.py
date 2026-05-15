@@ -51,6 +51,7 @@ CORS_ORIGINS: list[str] = [o.strip() for o in _cors_env.split(",") if o.strip()]
 # Rate limiting
 RATE_LIMIT_WINDOW = 60   # seconds per window
 RATE_LIMIT_DEFAULT = 100  # requests per window
+REGISTER_RATE_LIMIT = 5  # max registrations per IP per minute
 
 # Redis client
 redis_client: Optional[redis.Redis] = None
@@ -375,11 +376,19 @@ def _make_tokens(user_id: str, email: str) -> TokenResponse:
 
 
 @app.post("/api/v1/auth/register")
-async def register(data: UserRegister):
+async def register(request: Request, data: UserRegister):
     """
     Register a new user. Stores bcrypt-hashed password in Redis.
+    Rate-limited by client IP (5 registrations/min) to prevent account spam.
+    Provisions a default knowledge base on the MCP server after signup.
     Redis key: user_account:{email}
     """
+    # IP-based rate limit — reuse the same Lua script as API key limiting
+    client_ip = (request.headers.get("X-Forwarded-For") or "").split(",")[0].strip() \
+        or (request.client.host if request.client else "unknown")
+    if not await check_rate_limit(f"ip_register:{client_ip}", REGISTER_RATE_LIMIT):
+        raise HTTPException(status_code=429, detail="Too many registration attempts — try again later")
+
     email = data.email.lower().strip()
     if len(data.password) < 8:
         raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
@@ -409,6 +418,18 @@ async def register(data: UserRegister):
     except (redis_exc.RedisError, Exception) as exc:
         log.error("redis_unavailable", extra={"error": str(exc)})
         raise HTTPException(status_code=503, detail="Service temporarily unavailable")
+
+    # Provision default KB on MCP server — best-effort, don't fail registration if unavailable
+    try:
+        if _http_client:
+            await _http_client.post(
+                f"{MCP_SERVER_URL}/api/v1/knowledge-bases",
+                headers={"X-User-ID": user_id},
+                json={"kb_id": "default"},
+                timeout=10.0,
+            )
+    except Exception as exc:
+        log.warning("kb_provision_skipped", extra={"user_id": user_id, "error": str(exc)})
 
     return {"user_id": user_id, "email": email, "created_at": created_at}
 

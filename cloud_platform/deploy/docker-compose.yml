@@ -1,21 +1,6 @@
 version: '3.8'
 
 services:
-  postgres:
-    image: postgres:15-alpine
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: kb_mcp
-      POSTGRES_USER: kb_user
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U kb_user -d kb_mcp"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
   redis:
     image: redis:7-alpine
     restart: unless-stopped
@@ -36,7 +21,6 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - DATABASE_URL=postgresql://kb_user:${POSTGRES_PASSWORD}@postgres:5432/kb_mcp
       - REDIS_URL=redis://redis:6379
       - JWT_SECRET=${JWT_SECRET}
       - API_KEY_SALT=${API_KEY_SALT}
@@ -45,8 +29,6 @@ services:
       - QUOTA_DEFAULT=${QUOTA_DEFAULT:-10000}
     depends_on:
       redis:
-        condition: service_healthy
-      postgres:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -72,6 +54,5 @@ services:
       retries: 3
 
 volumes:
-  postgres_data:
   redis_data:
   kb_data:

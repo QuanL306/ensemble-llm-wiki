@@ -195,8 +195,22 @@ class TestAuthRoutes:
         mock.hset     = AsyncMock(return_value=True)
         mock.exists   = AsyncMock(return_value=0)
         mock.setex    = AsyncMock(return_value=True)
+        mock.smembers = AsyncMock(return_value=set())
         mock.pipeline = MagicMock()
-        with patch.object(gateway, "redis_client", mock):
+
+        # Rate-limit Lua script: return 1 (allowed) by default
+        lua_script = MagicMock()
+        lua_script.execute = AsyncMock(return_value=1)
+        mock.register_script = MagicMock(return_value=lua_script)
+
+        # Stub the MCP HTTP client so provisioning POST is a no-op in tests
+        mock_http = MagicMock()
+        mock_http.post = AsyncMock(return_value=MagicMock(status_code=200))
+
+        with patch.object(gateway, "redis_client", mock), \
+             patch.object(gateway, "_http_client", mock_http), \
+             patch.object(gateway, "_rate_limit_script", None), \
+             patch.object(gateway, "_quota_script", None):
             yield mock
 
     @pytest.fixture
