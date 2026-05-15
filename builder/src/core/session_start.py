@@ -15,6 +15,7 @@ Usage:
 """
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -96,7 +97,7 @@ def run_ingest(kb_path: Path, python: str = "python3") -> bool:
 
 def run_compile(kb_path: Path, python: str = "python3") -> bool:
     """Run compile-llm if ANTHROPIC_API_KEY is set."""
-    if "ANTHROPIC_API_KEY" not in subprocess.os.environ:
+    if "ANTHROPIC_API_KEY" not in os.environ:
         return False
 
     builder_cli = kb_path.parent / "builder" / "src" / "cli.py"
@@ -123,8 +124,7 @@ def run_confidence_scoring(kb_path: Path, python: str = "python3") -> bool:
     """Run confidence scoring on the KB."""
     try:
         # Import and run confidence scoring
-        script_dir = Path(__file__).parent
-        core_dir = script_dir.parent / "src" / "core"
+        core_dir = Path(__file__).parent
         if str(core_dir) not in sys.path:
             sys.path.insert(0, str(core_dir))
 
@@ -145,8 +145,7 @@ def run_confidence_scoring(kb_path: Path, python: str = "python3") -> bool:
 def run_exports(kb_path: Path, python: str = "python3") -> bool:
     """Regenerate AI-consumable exports."""
     try:
-        script_dir = Path(__file__).parent
-        core_dir = script_dir.parent / "src" / "core"
+        core_dir = Path(__file__).parent
         if str(core_dir) not in sys.path:
             sys.path.insert(0, str(core_dir))
 
@@ -172,14 +171,13 @@ def run_graphify_on_kb(kb_path: Path, python: str = "python3") -> bool:
 
     # Use graphify_integration module
     try:
-        script_dir = Path(__file__).parent
-        core_dir = script_dir.parent / "src" / "core"
+        core_dir = Path(__file__).parent
         if str(core_dir) not in sys.path:
             sys.path.insert(0, str(core_dir))
 
         from graphify_integration import run_graphify, generate_jsonld, split_edges
 
-        success = run_graphify(kb_path, "standard", python)
+        success = run_graphify(wiki_dir, "standard", python)
         if success:
             graph_json = graphify_out / "graph.json"
             if graph_json.exists():

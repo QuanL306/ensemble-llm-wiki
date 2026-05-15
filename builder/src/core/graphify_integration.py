@@ -15,7 +15,7 @@ Skill Seekers: yusufkaraaslan/Skill_Seekers (https://github.com/yusufkaraaslan/S
 Usage:
   python3 ingest_and_graph.py --input ./skill-seekers-output/ --project my-project
   python3 ingest_and_graph.py --input ./docs-scrape/ --project api-docs --mode deep
-  python3 ingest_and_graph.py --watch ./skill-seekers-output/ --project live-kb
+  python3 ingest_and_graph.py --input ./skill-seekers-output/ --project live-kb --watch
 """
 import argparse
 import json
@@ -239,49 +239,59 @@ def main():
     if args.watch:
         print(f"👀 Watching {input_dir} for changes...")
         print(f"   (excluding: graphify-out/, __pycache__/, .git/)")
-        last_mtime = {}
-        debounce_counter = 0
-        
+        last_mtime: dict = {}
+        pending_changes = False
+
         # Exclusion list
         exclude_dirs = {"graphify-out", "__pycache__", ".git", "node_modules", ".venv"}
-        
+
+        def _scan() -> bool:
+            """Scan input_dir, update last_mtime, return True if anything changed."""
+            changed = False
+            for f in input_dir.rglob("*"):
+                if not f.is_file():
+                    continue
+                if any(p.name in exclude_dirs for p in f.parents):
+                    continue
+                try:
+                    mtime = f.stat().st_mtime
+                except OSError:
+                    continue
+                fkey = str(f)
+                if fkey not in last_mtime or last_mtime[fkey] != mtime:
+                    changed = True
+                    last_mtime[fkey] = mtime
+            return changed
+
+        # Populate baseline on startup without triggering a build
+        _scan()
+
         try:
             while True:
-                changed = False
-                for f in input_dir.rglob("*"):
-                    if f.is_file():
-                        # Skip files in excluded directories
-                        if any(p.name in exclude_dirs for p in f.parents):
-                            continue
-                        try:
-                            mtime = f.stat().st_mtime
-                        except OSError:
-                            continue
-                        fkey = str(f)
-                        if fkey not in last_mtime or last_mtime[fkey] != mtime:
-                            changed = True
-                            last_mtime[fkey] = mtime
-                
-                if changed:
-                    debounce_counter += 1
-                    if debounce_counter >= 2:  # Require two consecutive change detections
-                        print(f"\n📝 Changes detected at {datetime.now().strftime('%H:%M:%S')}")
-                        run_graphify(input_dir, args.mode, python)
-                        if args.jsonld:
-                            generate_jsonld(
-                                input_dir / "graphify-out" / "graph.json",
-                                input_dir / "graphify-out" / "graph.jsonld",
-                                args.project,
-                            )
-                            split_edges(
-                                input_dir / "graphify-out" / "graph.json",
-                                input_dir / "graphify-out",
-                            )
-                        debounce_counter = 0
-                else:
-                    debounce_counter = 0
-                
                 time.sleep(5)
+                if not _scan():
+                    pending_changes = False
+                    continue
+
+                if not pending_changes:
+                    # First poll that sees changes — wait one more cycle to let writes settle
+                    pending_changes = True
+                    continue
+
+                # Two consecutive polls both saw changes → files have settled
+                print(f"\n📝 Changes detected at {datetime.now().strftime('%H:%M:%S')}")
+                run_graphify(input_dir, args.mode, python)
+                if args.jsonld:
+                    generate_jsonld(
+                        input_dir / "graphify-out" / "graph.json",
+                        input_dir / "graphify-out" / "graph.jsonld",
+                        args.project,
+                    )
+                    split_edges(
+                        input_dir / "graphify-out" / "graph.json",
+                        input_dir / "graphify-out",
+                    )
+                pending_changes = False
         except KeyboardInterrupt:
             print("\n👋 Watch mode stopped")
     else:

@@ -2,6 +2,7 @@
 
 # Web framework
 fastapi>=0.104.0
+starlette>=0.40,<1.0
 uvicorn[standard]>=0.24.0
 
 # MCP Protocol
@@ -15,6 +16,7 @@ redis>=5.0.0
 # Authentication
 PyJWT>=2.8.0
 bcrypt>=4.1.0
+email-validator>=2.0.0
 
 # HTTP client
 httpx>=0.25.0

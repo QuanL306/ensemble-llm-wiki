@@ -136,7 +136,7 @@ class WikiCompiler:
         "these", "those", "i", "you", "he", "she", "we", "they", "what",
         "which", "who", "how", "when", "where", "why", "not", "no", "can",
         "if", "then", "than", "so", "as", "also", "one", "two", "three",
-        "new", "use", "used", "using", "based", "see", "see", "each",
+        "new", "use", "used", "using", "based", "see", "each",
     }
 
     # Common Chinese stop words
