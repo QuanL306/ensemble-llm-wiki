@@ -103,7 +103,7 @@ wiki/_meta/file_index.json
 
 Headless wrapper for cron/auto-sync. For interactive workflows, use `graphify --mcp` directly.
 
-Powered by **safishamsi/graphify** — turns raw content into knowledge graphs with community detection. Adds two post-processing steps not provided by Graphify natively:
+Powered by **safishamsi/graphify** — turns raw content into knowledge graphs with community detection. Adds three post-processing steps not provided by Graphify natively:
 
 ```
 Skill Seekers output / raw/ directory
@@ -112,11 +112,39 @@ Skill Seekers output / raw/ directory
     │
     ├── generate_jsonld()  →  graph.jsonld (Schema.org)
     │
-    └── split_edges()  →  citations.jsonl + edges.jsonl
-                          (citation edges vs semantic edges)
+    ├── split_edges()  →  citations.jsonl + edges.jsonl
+    │                     (citation edges vs semantic edges)
+    │
+    └── tag_edge_provenance()  →  graph_provenance.json
+                                  edges_tagged.jsonl
 ```
 
 Borrowed from OmegaWiki's dual edge system — separates pure citation relationships from semantic ones to prevent citation noise from diluting the knowledge graph.
+
+**Edge provenance tags:** `EXTRACTED` (wikilink `[[…]]` found verbatim in an article), `INFERRED` (LLM-detected semantic relationship), `AMBIGUOUS` (inferred with weight < 0.3). Downstream consumers can filter by tag — e.g. use only `EXTRACTED` edges for a strict citation graph.
+
+### Transcript Harvester (`transcript_harvester.py`)
+
+Imports AI session transcripts into the KB's `raw/transcripts/` directory so they flow through the normal ingest → compile pipeline.
+
+```
+~/.claude/projects/**/*.jsonl   (Claude Code sessions)
+Cursor SQLite store              (Cursor sessions, macOS)
+    │
+    ▼ ClaudeCodeAdapter / CursorAdapter
+    │   • Parse user/assistant exchanges
+    │   • Skip sessions with <3 exchanges
+    │   • Scrub sensitive patterns (API keys, passwords, Bearer tokens)
+    │
+    ▼ session_to_markdown()
+    │   • YAML frontmatter: type, source, session_id, harvested date
+    │   • User/assistant exchange pairs (assistant text truncated at 2 000 chars)
+    │
+    ▼ raw/transcripts/<slug>.md
+        + .harvest_manifest.json  (dedup: slug → {harvested_at, source, count})
+```
+
+Triggered via `python cli.py harvest [--since N] [--sources …]`.
 
 ### Confidence Scoring (`confidence.py`)
 
@@ -179,12 +207,17 @@ Ingest-time detection borrowed from SamurAIGPT/llm-wiki-agent:
 
 ## Component 2 — Local Server
 
-MCP stdio server exposing 5 tools: `kb_query`, `kb_search`, `kb_list_docs`, `kb_get_document`, `kb_list`.
+MCP stdio server exposing 6 tools: `kb_query`, `kb_search`, `kb_list_docs`, `kb_get_document`, `kb_list`, `kb_save_synthesis`.
 
-Now confidence-aware:
+Confidence-aware:
 - `kb_list` shows verified document count
 - `kb_list_docs` shows ★★★/★★☆/★☆☆ tier labels + lifecycle state + ⚠️ contradiction flags
 - `kb_search` shows confidence tier per result
+
+**Syntheses** — `kb_save_synthesis(question, answer, sources)` writes a permanent wiki page to `wiki/syntheses/<slug>.md` with YAML frontmatter (`type: synthesis`). Syntheses are:
+- Searchable alongside compiled articles via `kb_search` and `kb_list_docs`
+- Listed with a `(synthesis)` suffix in `kb_list_docs`
+- Written by the AI at query time rather than compiled from source documents
 
 ### Retrieval scoring model
 
@@ -218,6 +251,39 @@ Auto-discovers knowledge bases via `.kbaconfig` files and Graphify outputs via `
 
 HTTP API gateway + MCP HTTP server with Redis-backed auth, rate limiting, monthly quotas, and multi-tenant KB isolation. Same tool surface as the local server.
 
+### Shared KB Access
+
+Team members can be granted read or write access to another user's KB without provisioning a separate copy.
+
+```
+Membership stored in .kbaconfig (YAML):
+  owner: <owner_user_id>
+  members:
+    - user_id: <bob_uuid>
+      role: write
+    - user_id: <carol_uuid>
+      role: read
+
+Access control flow:
+  X-User-ID      — authenticated caller (from API key or JWT sub)
+  X-KB-Owner-ID  — whose KB to access (defaults to X-User-ID → backward-compatible)
+
+  check_access(owner_id, kb_id, requester_id, required_role):
+    owner   → always allowed
+    member  → role hierarchy: write > read (write also grants read)
+    other   → denied
+
+Management endpoints (gateway, JWT-authenticated):
+  POST   /api/v1/knowledge-bases/{kb_id}/members        add/update member by email
+  DELETE /api/v1/knowledge-bases/{kb_id}/members/{email} remove member
+
+  Gateway resolves email → user_id via Redis before calling MCP server.
+```
+
+`list_shared_kbs` results are cached per requester (60 s TTL, instance-scoped); cache entry is invalidated immediately when a member is added or removed.
+
+Old KBs without an `owner` field in `.kbaconfig` are migrated transparently — the field is written on the first member-management operation.
+
 ---
 
 ## Key Design Decisions
@@ -237,3 +303,9 @@ HTTP API gateway + MCP HTTP server with Redis-backed auth, rate limiting, monthl
 **Non-blocking enrichment**: Contradiction detection and Graphify are non-blocking — failure doesn't halt the pipeline.
 
 **Embedding-assisted without vector DB**: Vectors stored in `embeddings.json` (~1.5KB per doc). No FAISS/Pinecone/ChromaDB needed. Graceful fallback to pure keyword TF-IDF.
+
+**Shared KB via header, not URL**: `X-KB-Owner-ID` defaults to `X-User-ID` — existing single-user clients continue working without any change. Ownership and membership are resolved entirely server-side from `.kbaconfig`; the gateway never needs to know the KB directory structure.
+
+**Syntheses vs articles**: Articles are compiled by the LLM from source documents at build time. Syntheses are written by the AI at query time in response to a specific question. They are stored separately (`wiki/syntheses/`) but searched alongside articles. The separation makes provenance clear — a synthesis has no confidence score because it has no independent sources.
+
+**Transcript harvesting with credential scrubbing**: Session transcripts often contain sensitive data typed during coding work. The harvester redacts credential patterns (API keys, passwords, Bearer tokens) before writing to disk — failing safe (over-redacting) rather than under-redacting.
