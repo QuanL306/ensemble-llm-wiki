@@ -63,22 +63,23 @@ class TestGuardKbWrite:
     _guard_kb_write must:
     - Reject IDs containing path-traversal characters
     - Reject writes to KBs that don't exist on disk
-    - Allow writes when the KB is present
+    - Reject writes by non-members
+    - Allow writes when the KB is present and requester has write access
     """
 
     def test_rejects_traversal_in_kb_id(self):
-        err = cloud._guard_kb_write("alice", "../../admin")
+        err = cloud._guard_kb_write("alice", "../../admin", "alice")
         assert err is not None
         assert err["isError"] is True
         assert "Error" in err["content"][0]["text"]
 
     def test_rejects_traversal_in_user_id(self):
-        err = cloud._guard_kb_write("../root", "my-kb")
+        err = cloud._guard_kb_write("../root", "my-kb", "../root")
         assert err is not None
         assert err["isError"] is True
 
     def test_rejects_empty_user_id(self):
-        err = cloud._guard_kb_write("", "my-kb")
+        err = cloud._guard_kb_write("", "my-kb", "")
         assert err is not None
         assert err["isError"] is True
 
@@ -87,18 +88,18 @@ class TestGuardKbWrite:
         orig = cloud.kb_manager.base_path
         cloud.kb_manager.base_path = tmp_path
         try:
-            err = cloud._guard_kb_write("alice", "ghost-kb")
+            err = cloud._guard_kb_write("alice", "ghost-kb", "alice")
             assert err is not None
             assert err["isError"] is True
         finally:
             cloud.kb_manager.base_path = orig
 
     def test_allows_valid_existing_kb(self, tmp_kb):
-        """A KB with a .kbaconfig on disk must pass the guard."""
+        """A KB with a .kbaconfig on disk must pass the guard (owner writing own KB)."""
         orig = cloud.kb_manager.base_path
         cloud.kb_manager.base_path = tmp_kb["base"]
         try:
-            err = cloud._guard_kb_write(tmp_kb["user_id"], tmp_kb["kb_id"])
+            err = cloud._guard_kb_write(tmp_kb["user_id"], tmp_kb["kb_id"], tmp_kb["user_id"])
             assert err is None, (
                 f"Expected guard to pass for a real KB, got: {err}"
             )
@@ -107,7 +108,171 @@ class TestGuardKbWrite:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Group 3: KnowledgeBaseManager.search_documents — retrieval scoring
+# Group 3: KB Access Control
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestKBAccessControl:
+    """
+    Tests for check_access(), _guard_kb_write (with owner_id), and
+    the member management HTTP endpoints.
+    """
+
+    def _make_kb(self, base_path, owner_id, kb_id, members=None):
+        """Create a minimal KB with .kbaconfig containing owner + members."""
+        import yaml
+        kb_root = base_path / owner_id / kb_id
+        kb_root.mkdir(parents=True, exist_ok=True)
+        config = {
+            "name": kb_id,
+            "version": "1.0",
+            "owner": owner_id,
+            "members": members or [],
+        }
+        (kb_root / ".kbaconfig").write_text(yaml.safe_dump(config), encoding="utf-8")
+        return kb_root
+
+    # ── check_access ─────────────────────────────────────────────────────────
+
+    def test_owner_always_has_read_access(self, tmp_path):
+        self._make_kb(tmp_path, "alice", "research")
+        mgr = cloud.KnowledgeBaseManager(str(tmp_path))
+        assert mgr.check_access("alice", "research", "alice", "read") is True
+
+    def test_owner_always_has_write_access(self, tmp_path):
+        self._make_kb(tmp_path, "alice", "research")
+        mgr = cloud.KnowledgeBaseManager(str(tmp_path))
+        assert mgr.check_access("alice", "research", "alice", "write") is True
+
+    def test_read_member_has_read_access(self, tmp_path):
+        self._make_kb(tmp_path, "alice", "research",
+                      members=[{"user_id": "bob", "role": "read"}])
+        mgr = cloud.KnowledgeBaseManager(str(tmp_path))
+        assert mgr.check_access("alice", "research", "bob", "read") is True
+
+    def test_write_member_also_has_read_access(self, tmp_path):
+        self._make_kb(tmp_path, "alice", "research",
+                      members=[{"user_id": "bob", "role": "write"}])
+        mgr = cloud.KnowledgeBaseManager(str(tmp_path))
+        assert mgr.check_access("alice", "research", "bob", "read") is True
+
+    def test_read_member_denied_write_access(self, tmp_path):
+        self._make_kb(tmp_path, "alice", "research",
+                      members=[{"user_id": "bob", "role": "read"}])
+        mgr = cloud.KnowledgeBaseManager(str(tmp_path))
+        assert mgr.check_access("alice", "research", "bob", "write") is False
+
+    def test_non_member_denied_read_access(self, tmp_path):
+        self._make_kb(tmp_path, "alice", "research")
+        mgr = cloud.KnowledgeBaseManager(str(tmp_path))
+        assert mgr.check_access("alice", "research", "carol", "read") is False
+
+    # ── _guard_kb_write with owner_id ────────────────────────────────────────
+
+    def test_guard_write_denies_non_member(self, tmp_path):
+        self._make_kb(tmp_path, "alice", "research")
+        orig = cloud.kb_manager.base_path
+        cloud.kb_manager.base_path = tmp_path
+        try:
+            err = cloud._guard_kb_write("bob", "research", "alice")
+            assert err is not None
+            assert "write access denied" in err["content"][0]["text"]
+        finally:
+            cloud.kb_manager.base_path = orig
+
+    def test_guard_write_allows_write_member(self, tmp_path):
+        self._make_kb(tmp_path, "alice", "research",
+                      members=[{"user_id": "bob", "role": "write"}])
+        orig = cloud.kb_manager.base_path
+        cloud.kb_manager.base_path = tmp_path
+        try:
+            err = cloud._guard_kb_write("bob", "research", "alice")
+            assert err is None
+        finally:
+            cloud.kb_manager.base_path = orig
+
+    # ── Member management endpoints ──────────────────────────────────────────
+
+    def test_add_kb_member_endpoint(self, tmp_path):
+        """POST /api/v1/knowledge-bases/members adds the member to .kbaconfig."""
+        import yaml
+        from fastapi.testclient import TestClient
+
+        self._make_kb(tmp_path, "alice", "research")
+        orig = cloud.kb_manager.base_path
+        cloud.kb_manager.base_path = tmp_path
+        try:
+            client = TestClient(cloud.app)
+            resp = client.post(
+                "/api/v1/knowledge-bases/members",
+                headers={"X-User-ID": "alice", "X-KB-ID": "research"},
+                json={"member_user_id": "bob", "role": "read"},
+            )
+            assert resp.status_code == 200
+            body = resp.json()
+            assert body["member_user_id"] == "bob"
+            assert body["role"] == "read"
+
+            config = yaml.safe_load(
+                (tmp_path / "alice" / "research" / ".kbaconfig").read_text()
+            )
+            members = config.get("members", [])
+            assert any(m["user_id"] == "bob" for m in members)
+        finally:
+            cloud.kb_manager.base_path = orig
+
+    def test_remove_kb_member_endpoint(self, tmp_path):
+        """DELETE /api/v1/knowledge-bases/members/{id} removes the member."""
+        import yaml
+        from fastapi.testclient import TestClient
+
+        self._make_kb(tmp_path, "alice", "research",
+                      members=[{"user_id": "bob", "role": "read"}])
+        orig = cloud.kb_manager.base_path
+        cloud.kb_manager.base_path = tmp_path
+        try:
+            client = TestClient(cloud.app)
+            resp = client.delete(
+                "/api/v1/knowledge-bases/members/bob",
+                headers={"X-User-ID": "alice", "X-KB-ID": "research"},
+            )
+            assert resp.status_code == 200
+
+            config = yaml.safe_load(
+                (tmp_path / "alice" / "research" / ".kbaconfig").read_text()
+            )
+            members = config.get("members", [])
+            assert not any(m["user_id"] == "bob" for m in members)
+        finally:
+            cloud.kb_manager.base_path = orig
+
+    def test_add_member_non_owner_rejected(self, tmp_path):
+        """owner field in .kbaconfig != requester → 403."""
+        import yaml
+        from fastapi.testclient import TestClient
+
+        # Create a KB under bob's path but with alice listed as the owner
+        # (simulates direct MCP call bypassing the gateway).
+        kb_root = tmp_path / "bob" / "research"
+        kb_root.mkdir(parents=True, exist_ok=True)
+        config = {"name": "research", "version": "1.0", "owner": "alice", "members": []}
+        (kb_root / ".kbaconfig").write_text(yaml.safe_dump(config), encoding="utf-8")
+
+        orig = cloud.kb_manager.base_path
+        cloud.kb_manager.base_path = tmp_path
+        try:
+            client = TestClient(cloud.app)
+            resp = client.post(
+                "/api/v1/knowledge-bases/members",
+                headers={"X-User-ID": "bob", "X-KB-ID": "research"},
+                json={"member_user_id": "carol", "role": "read"},
+            )
+            assert resp.status_code == 403
+        finally:
+            cloud.kb_manager.base_path = orig
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Group 4: KnowledgeBaseManager.search_documents — retrieval scoring
 # ═══════════════════════════════════════════════════════════════════════════
 
 class TestSearchScoring:

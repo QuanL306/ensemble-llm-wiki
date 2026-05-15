@@ -162,6 +162,10 @@ class APIKeyCreate(BaseModel):
     name: str
     permissions: List[str] = ["read"]
 
+class KBMemberAdd(BaseModel):
+    email: EmailStr
+    role: str = "read"   # "read" or "write"
+
 class APIKeyResponse(BaseModel):
     id: str
     name: str
@@ -632,8 +636,9 @@ async def _proxy_to_mcp(request: Request, path: str, method: str) -> Response:
     api_key = await get_api_key(request)
     key_info = await verify_api_key(api_key, request)
 
-    user_id = key_info["user_id"]
-    kb_id   = request.headers.get("X-KB-ID") or request.query_params.get("kb_id", "default")
+    user_id    = key_info["user_id"]
+    kb_id      = request.headers.get("X-KB-ID") or request.query_params.get("kb_id", "default")
+    kb_owner_id = request.headers.get("X-KB-Owner-ID", user_id)
 
     if not await check_rate_limit(api_key, key_info["rate_limit"]):
         log.warning(
@@ -652,11 +657,12 @@ async def _proxy_to_mcp(request: Request, path: str, method: str) -> Response:
         raise HTTPException(status_code=429, detail="Quota exceeded")
 
     forwarded_headers = {
-        "X-User-ID":    user_id,
-        "X-KB-ID":      kb_id,
-        "X-API-Key-ID": key_info["key_id"],
+        "X-User-ID":     user_id,
+        "X-KB-ID":       kb_id,
+        "X-KB-Owner-ID": kb_owner_id,
+        "X-API-Key-ID":  key_info["key_id"],
         "X-Permissions": ",".join(key_info["permissions"]),
-        "X-Request-ID": req_id,          # propagate correlation ID to MCP server
+        "X-Request-ID":  req_id,
     }
 
     client = _http_client
@@ -778,6 +784,104 @@ async def get_usage_stats(request: Request, api_key: str = Depends(get_api_key))
             "window": RATE_LIMIT_WINDOW
         }
     }
+
+
+# ============ KB Member Management (JWT-authenticated) ============
+
+@app.post("/api/v1/knowledge-bases/{kb_id}/members")
+async def add_kb_member(
+    kb_id: str,
+    data: KBMemberAdd,
+    user: dict = Depends(verify_jwt_token),
+):
+    """
+    Add or update a member on the caller's KB.
+    Looks up the member's user_id by email in Redis, then calls the MCP server.
+    """
+    if data.role not in ("read", "write"):
+        raise HTTPException(status_code=400, detail="role must be 'read' or 'write'")
+
+    email = data.email.lower().strip()
+    try:
+        member_data = await redis_client.hgetall(f"user_account:{email}")
+    except Exception as exc:
+        log.error("redis_unavailable", extra={"error": str(exc)})
+        raise HTTPException(status_code=503, detail="Service temporarily unavailable")
+
+    if not member_data:
+        raise HTTPException(status_code=404, detail="No user registered with that email")
+
+    owner_id = user["sub"]
+    member_user_id = member_data["user_id"]
+
+    if _http_client is None:
+        raise HTTPException(status_code=503, detail="Gateway not initialized")
+
+    try:
+        resp = await _http_client.post(
+            f"{MCP_SERVER_URL}/api/v1/knowledge-bases/members",
+            headers={"X-User-ID": owner_id, "X-KB-ID": kb_id},
+            json={"member_user_id": member_user_id, "role": data.role},
+            timeout=10.0,
+        )
+    except Exception as exc:
+        log.error("mcp_member_add_failed", extra={"error": str(exc)})
+        raise HTTPException(status_code=502, detail="MCP server error")
+
+    if resp.status_code == 404:
+        raise HTTPException(status_code=404, detail="Knowledge base not found")
+    if resp.status_code == 403:
+        raise HTTPException(status_code=403, detail="Not the KB owner")
+    if resp.status_code != 200:
+        raise HTTPException(status_code=resp.status_code, detail="Failed to add member")
+
+    return {"kb_id": kb_id, "email": email, "member_user_id": member_user_id, "role": data.role}
+
+
+@app.delete("/api/v1/knowledge-bases/{kb_id}/members/{member_email}")
+async def remove_kb_member(
+    kb_id: str,
+    member_email: str,
+    user: dict = Depends(verify_jwt_token),
+):
+    """
+    Remove a member from the caller's KB.
+    Looks up the member's user_id by email in Redis, then calls the MCP server.
+    """
+    email = member_email.lower().strip()
+    try:
+        member_data = await redis_client.hgetall(f"user_account:{email}")
+    except Exception as exc:
+        log.error("redis_unavailable", extra={"error": str(exc)})
+        raise HTTPException(status_code=503, detail="Service temporarily unavailable")
+
+    if not member_data:
+        raise HTTPException(status_code=404, detail="No user registered with that email")
+
+    owner_id = user["sub"]
+    member_user_id = member_data["user_id"]
+
+    if _http_client is None:
+        raise HTTPException(status_code=503, detail="Gateway not initialized")
+
+    try:
+        resp = await _http_client.delete(
+            f"{MCP_SERVER_URL}/api/v1/knowledge-bases/members/{member_user_id}",
+            headers={"X-User-ID": owner_id, "X-KB-ID": kb_id},
+            timeout=10.0,
+        )
+    except Exception as exc:
+        log.error("mcp_member_remove_failed", extra={"error": str(exc)})
+        raise HTTPException(status_code=502, detail="MCP server error")
+
+    if resp.status_code == 404:
+        raise HTTPException(status_code=404, detail="Knowledge base or member not found")
+    if resp.status_code == 403:
+        raise HTTPException(status_code=403, detail="Not the KB owner")
+    if resp.status_code != 200:
+        raise HTTPException(status_code=resp.status_code, detail="Failed to remove member")
+
+    return {"kb_id": kb_id, "email": email, "member_user_id": member_user_id, "action": "removed"}
 
 
 if __name__ == "__main__":

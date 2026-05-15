@@ -403,3 +403,112 @@ class TestAuthRoutes:
         )
         assert resp.status_code == 400
         assert "superadmin" in resp.json()["detail"]
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 3. KB Member Management routes
+# ═══════════════════════════════════════════════════════════════════════════
+
+@_gateway_available
+class TestKBMemberRoutes:
+    """
+    Tests for POST/DELETE /api/v1/knowledge-bases/{kb_id}/members.
+
+    The gateway looks up member email → user_id in Redis, then calls the
+    MCP server.  Both Redis and the MCP HTTP client are mocked.
+    """
+
+    @pytest.fixture(autouse=True)
+    def mock_redis(self):
+        mock = MagicMock()
+        mock.hget     = AsyncMock(return_value=None)
+        mock.hgetall  = AsyncMock(return_value={})
+        mock.hset     = AsyncMock(return_value=True)
+        mock.exists   = AsyncMock(return_value=0)
+        mock.setex    = AsyncMock(return_value=True)
+        mock.smembers = AsyncMock(return_value=set())
+        mock.pipeline = MagicMock()
+
+        lua_script = MagicMock()
+        lua_script.execute = AsyncMock(return_value=1)
+        mock.register_script = MagicMock(return_value=lua_script)
+
+        mock_http = MagicMock()
+        mock_http.post   = AsyncMock(return_value=MagicMock(status_code=200))
+        mock_http.delete = AsyncMock(return_value=MagicMock(status_code=200))
+
+        with patch.object(gateway, "redis_client", mock), \
+             patch.object(gateway, "_http_client", mock_http), \
+             patch.object(gateway, "_rate_limit_script", None), \
+             patch.object(gateway, "_quota_script", None):
+            yield mock, mock_http
+
+    @pytest.fixture
+    def client(self):
+        from fastapi.testclient import TestClient
+        return TestClient(gateway.app)
+
+    def _auth(self):
+        return gateway._make_tokens("owner-1", "owner@example.com")
+
+    # ── add member ────────────────────────────────────────────────────────────
+
+    def test_add_member_success(self, client, mock_redis):
+        mock_redis_obj, mock_http = mock_redis
+        # Member alice@example.com exists in Redis
+        mock_redis_obj.hgetall.return_value = {
+            "user_id": "alice-uuid",
+            "email": "alice@example.com",
+        }
+        tokens = self._auth()
+        resp = client.post(
+            "/api/v1/knowledge-bases/research/members",
+            json={"email": "alice@example.com", "role": "read"},
+            headers={"Authorization": f"Bearer {tokens.access_token}"},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["member_user_id"] == "alice-uuid"
+        assert body["role"] == "read"
+        # MCP server was called
+        mock_http.post.assert_called_once()
+
+    def test_add_member_unknown_email_returns_404(self, client, mock_redis):
+        mock_redis_obj, _ = mock_redis
+        mock_redis_obj.hgetall.return_value = {}   # email not registered
+        tokens = self._auth()
+        resp = client.post(
+            "/api/v1/knowledge-bases/research/members",
+            json={"email": "ghost@example.com", "role": "read"},
+            headers={"Authorization": f"Bearer {tokens.access_token}"},
+        )
+        assert resp.status_code == 404
+
+    def test_add_member_invalid_role_returns_400(self, client, mock_redis):
+        mock_redis_obj, _ = mock_redis
+        mock_redis_obj.hgetall.return_value = {"user_id": "bob-uuid", "email": "bob@example.com"}
+        tokens = self._auth()
+        resp = client.post(
+            "/api/v1/knowledge-bases/research/members",
+            json={"email": "bob@example.com", "role": "superadmin"},
+            headers={"Authorization": f"Bearer {tokens.access_token}"},
+        )
+        assert resp.status_code == 400
+
+    # ── remove member ─────────────────────────────────────────────────────────
+
+    def test_remove_member_success(self, client, mock_redis):
+        mock_redis_obj, mock_http = mock_redis
+        mock_redis_obj.hgetall.return_value = {
+            "user_id": "alice-uuid",
+            "email": "alice@example.com",
+        }
+        tokens = self._auth()
+        resp = client.delete(
+            "/api/v1/knowledge-bases/research/members/alice@example.com",
+            headers={"Authorization": f"Bearer {tokens.access_token}"},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["action"] == "removed"
+        mock_http.delete.assert_called_once()

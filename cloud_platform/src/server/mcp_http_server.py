@@ -201,7 +201,54 @@ class KnowledgeBaseManager:
         """Return True if the knowledge base exists"""
         kb_path = self.get_kb_path(user_id, kb_id)
         return (kb_path / ".kbaconfig").exists()
-    
+
+    def get_kb_config(self, owner_id: str, kb_id: str) -> dict:
+        """Load .kbaconfig for the given owner/kb_id pair."""
+        return self._load_config(self.get_kb_path(owner_id, kb_id))
+
+    def check_access(self, owner_id: str, kb_id: str,
+                     requester_id: str, required_role: str) -> bool:
+        """
+        Return True if requester can access this KB at required_role level.
+        Owner always passes. Write role also grants read.
+        """
+        if requester_id == owner_id:
+            return True
+        config = self.get_kb_config(owner_id, kb_id)
+        for m in config.get("members", []):
+            if m.get("user_id") == requester_id:
+                member_role = m.get("role", "read")
+                if required_role == "read":
+                    return member_role in ("read", "write")
+                return member_role == "write"
+        return False
+
+    def list_shared_kbs(self, requester_id: str) -> list:
+        """Scan all KBs and return those where requester_id is a member (not owner)."""
+        results = []
+        for user_dir in self.base_path.iterdir():
+            if not user_dir.is_dir():
+                continue
+            owner_id = user_dir.name
+            if owner_id == requester_id:
+                continue
+            for kb_dir in user_dir.iterdir():
+                if not (kb_dir.is_dir() and (kb_dir / ".kbaconfig").exists()):
+                    continue
+                config = self._load_config(kb_dir)
+                for m in config.get("members", []):
+                    if m.get("user_id") == requester_id:
+                        stats = self._get_kb_stats(kb_dir)
+                        results.append({
+                            "id": kb_dir.name,
+                            "owner_id": owner_id,
+                            "name": config.get("name", kb_dir.name),
+                            "role": m.get("role", "read"),
+                            "stats": stats,
+                        })
+                        break
+        return results
+
     def list_knowledge_bases(self, user_id: str) -> List[Dict]:
         """List all knowledge bases belonging to a user"""
         user_path = self.base_path / user_id
@@ -606,11 +653,11 @@ async def _synthesize_async(question: str, snippets: list,
 
 # ============ MCP Protocol Handlers ============
 
-def _get_user_context(request: Request) -> Tuple[str, str, str]:
+def _get_user_context(request: Request) -> Tuple[str, str, str, str]:
     """
-    Extract user_id, kb_id, and req_id from gateway-forwarded headers.
+    Extract user_id, kb_id, owner_id, and req_id from gateway-forwarded headers.
     Falls back to query params for direct (non-gateway) access.
-    Gateway sets X-User-ID, X-KB-ID, and X-Request-ID after verifying the API key.
+    X-KB-Owner-ID defaults to X-User-ID (own KB, backward-compatible).
     All IDs are sanitized to prevent path traversal.
     """
     user_id = _sanitize_id(
@@ -621,8 +668,11 @@ def _get_user_context(request: Request) -> Tuple[str, str, str]:
         request.headers.get("X-KB-ID")
         or request.query_params.get("kb_id", "default")
     )
+    owner_id = _sanitize_id(
+        request.headers.get("X-KB-Owner-ID") or user_id
+    )
     req_id = request.headers.get("X-Request-ID", "-")
-    return user_id or "anonymous", kb_id or "default", req_id
+    return user_id or "anonymous", kb_id or "default", owner_id or user_id, req_id
 
 
 def _sanitize_id(value: str) -> str:
@@ -663,14 +713,14 @@ def _get_kb_write_lock(user_id: str, kb_id: str) -> asyncio.Lock:
     return _kb_write_locks[key]
 
 
-def _guard_kb_write(user_id: str, kb_id: str) -> Optional[dict]:
+def _guard_kb_write(user_id: str, kb_id: str, owner_id: str) -> Optional[dict]:
     """
-    Return an error payload if the target KB does not exist or the IDs look
-    suspicious after sanitisation.  Returns None when the write is allowed.
+    Return an error payload if the write is not allowed. Returns None when allowed.
 
-    This prevents:
-      - Path-traversal: kb_id='../../admin' is sanitised to '' → rejected
-      - Writing to non-existent KBs (prevents creating arbitrary directories)
+    Checks:
+      - IDs pass sanitisation (prevents path traversal)
+      - KB exists under owner_id
+      - requester (user_id) has write access to owner's KB
     """
     safe_uid = _sanitize_id(user_id)
     safe_kid = _sanitize_id(kb_id)
@@ -680,15 +730,34 @@ def _guard_kb_write(user_id: str, kb_id: str) -> Optional[dict]:
             "content": [{"type": "text", "text": "Error: invalid user_id or kb_id"}],
             "isError": True
         }
-    # user_id / kb_id must not have been altered by sanitisation
     if safe_uid != user_id or safe_kid != kb_id:
         return {
             "content": [{"type": "text", "text": "Error: user_id or kb_id contains disallowed characters"}],
             "isError": True
         }
-    if not kb_manager.kb_exists(user_id, kb_id):
+    if not kb_manager.kb_exists(owner_id, kb_id):
         return {
-            "content": [{"type": "text", "text": f"Error: knowledge base '{kb_id}' not found for this user"}],
+            "content": [{"type": "text", "text": f"Error: knowledge base '{kb_id}' not found"}],
+            "isError": True
+        }
+    if not kb_manager.check_access(owner_id, kb_id, user_id, "write"):
+        return {
+            "content": [{"type": "text", "text": "Error: write access denied"}],
+            "isError": True
+        }
+    return None
+
+
+def _guard_kb_read(user_id: str, kb_id: str, owner_id: str) -> Optional[dict]:
+    """Return an error payload if the read is not allowed. Returns None when allowed."""
+    if not kb_manager.kb_exists(owner_id, kb_id):
+        return {
+            "content": [{"type": "text", "text": f"Error: knowledge base '{kb_id}' not found"}],
+            "isError": True
+        }
+    if not kb_manager.check_access(owner_id, kb_id, user_id, "read"):
+        return {
+            "content": [{"type": "text", "text": "Error: read access denied"}],
             "isError": True
         }
     return None
@@ -836,7 +905,7 @@ async def mcp_list_tools(request: Request):
 @app.post("/mcp/v1/tools/call")
 async def mcp_call_tool(body: ToolCallRequest, request: Request):
     """Dispatch an MCP tool call"""
-    user_id, kb_id, req_id = _get_user_context(request)
+    user_id, kb_id, owner_id, req_id = _get_user_context(request)
 
     tool_name = body.name
     args = body.arguments
@@ -849,11 +918,14 @@ async def mcp_call_tool(body: ToolCallRequest, request: Request):
 
     try:
         if tool_name == "kb_list_docs":
+            guard = _guard_kb_read(user_id, kb_id, owner_id)
+            if guard:
+                return guard
             keyword = args.get("keyword", "").lower().strip()
             limit = min(int(args.get("limit", 30)), 200)
             offset = max(int(args.get("offset", 0)), 0)
-            kb_path = kb_manager.get_kb_path(user_id, kb_id)
-            index = kb_manager._load_index_cached(kb_path, user_id, kb_id)
+            kb_path = kb_manager.get_kb_path(owner_id, kb_id)
+            index = kb_manager._load_index_cached(kb_path, owner_id, kb_id)
             if index is None:
                 return {"content": [{"type": "text", "text": "Error: index not found or corrupt."}], "isError": True}
 
@@ -900,10 +972,13 @@ async def mcp_call_tool(body: ToolCallRequest, request: Request):
             return {"content": [{"type": "text", "text": content}], "isError": False}
 
         elif tool_name == "kb_search":
+            guard = _guard_kb_read(user_id, kb_id, owner_id)
+            if guard:
+                return guard
             query = args.get("query", "")
             limit = min(int(args.get("limit", 5)), 50)
             offset = max(int(args.get("offset", 0)), 0)
-            all_results = kb_manager.search_documents(user_id, kb_id, query)
+            all_results = kb_manager.search_documents(owner_id, kb_id, query)
             total = len(all_results)
             results = all_results[offset: offset + limit]
             content = f"Found {total} match(es)"
@@ -923,9 +998,12 @@ async def mcp_call_tool(body: ToolCallRequest, request: Request):
             return {"content": [{"type": "text", "text": content}], "isError": False}
 
         elif tool_name == "kb_get_document":
+            guard = _guard_kb_read(user_id, kb_id, owner_id)
+            if guard:
+                return guard
             doc_id = args.get("doc_id", "")
             section = args.get("section", "").strip()
-            raw_content = kb_manager.get_document(user_id, kb_id, doc_id)
+            raw_content = kb_manager.get_document(owner_id, kb_id, doc_id)
             if not raw_content:
                 return {"content": [{"type": "text", "text": f"Document not found: {doc_id}"}], "isError": True}
             if section:
@@ -936,6 +1014,9 @@ async def mcp_call_tool(body: ToolCallRequest, request: Request):
             return {"content": [{"type": "text", "text": raw_content + "\n\n[END OF DOCUMENT — present the content to the user, do not call any more tools]"}], "isError": False}
 
         elif tool_name == "kb_query":
+            guard = _guard_kb_read(user_id, kb_id, owner_id)
+            if guard:
+                return guard
             question = args.get("question", "")
 
             from core import scoring as _scoring
@@ -947,7 +1028,7 @@ async def mcp_call_tool(body: ToolCallRequest, request: Request):
                     "isError": False
                 }
 
-            kb_path = kb_manager.get_kb_path(user_id, kb_id)
+            kb_path = kb_manager.get_kb_path(owner_id, kb_id)
             results_map: dict = {}   # file_id → best result
             all_files = {}
 
@@ -955,9 +1036,9 @@ async def mcp_call_tool(body: ToolCallRequest, request: Request):
             concepts_data = {}
             embeddings = {}
             try:
-                index = kb_manager._load_index_cached(kb_path, user_id, kb_id)
+                index = kb_manager._load_index_cached(kb_path, owner_id, kb_id)
                 if index:
-                    _warn_schema(index, user_id, kb_id)
+                    _warn_schema(index, owner_id, kb_id)
                     all_files = index.get("files", {})
 
                     concepts_file = kb_path / "wiki" / "_meta" / "concepts.json"
@@ -967,7 +1048,7 @@ async def mcp_call_tool(body: ToolCallRequest, request: Request):
                         except Exception:
                             pass
 
-                    embeddings = _load_embeddings(kb_path, user_id, kb_id)
+                    embeddings = _load_embeddings(kb_path, owner_id, kb_id)
             except Exception:
                 pass
 
@@ -1091,7 +1172,7 @@ async def mcp_call_tool(body: ToolCallRequest, request: Request):
             }
         
         elif tool_name == "kb_write_article":
-            guard = _guard_kb_write(user_id, kb_id)
+            guard = _guard_kb_write(user_id, kb_id, owner_id)
             if guard:
                 return guard
 
@@ -1106,10 +1187,10 @@ async def mcp_call_tool(body: ToolCallRequest, request: Request):
             if len(content_text) > 1_000_000:
                 return {"content": [{"type": "text", "text": "Error: content exceeds 1MB limit"}], "isError": True}
 
-            async with _get_kb_write_lock(user_id, kb_id):
+            async with _get_kb_write_lock(owner_id, kb_id):
               safe_name = re.sub(r'[^\w\s-]', '', title).strip()
               safe_name = re.sub(r'[\s]+', '_', safe_name).lower()
-              kb_path = kb_manager.get_kb_path(user_id, kb_id)
+              kb_path = kb_manager.get_kb_path(owner_id, kb_id)
               articles_dir = kb_path / "wiki" / "_articles"
               articles_dir.mkdir(parents=True, exist_ok=True)
               article_path = articles_dir / f"{safe_name}.md"
@@ -1135,7 +1216,7 @@ async def mcp_call_tool(body: ToolCallRequest, request: Request):
               }
 
         elif tool_name == "kb_append_note":
-            guard = _guard_kb_write(user_id, kb_id)
+            guard = _guard_kb_write(user_id, kb_id, owner_id)
             if guard:
                 return guard
 
@@ -1146,8 +1227,8 @@ async def mcp_call_tool(body: ToolCallRequest, request: Request):
             if not doc_id or not note:
                 return {"content": [{"type": "text", "text": "Error: doc_id and note are required"}], "isError": True}
 
-            async with _get_kb_write_lock(user_id, kb_id):
-              kb_path = kb_manager.get_kb_path(user_id, kb_id)
+            async with _get_kb_write_lock(owner_id, kb_id):
+              kb_path = kb_manager.get_kb_path(owner_id, kb_id)
               articles_dir = kb_path / "wiki" / "_articles"
               target = None
               if articles_dir.exists():
@@ -1185,7 +1266,7 @@ async def mcp_call_tool(body: ToolCallRequest, request: Request):
               }
 
         elif tool_name == "kb_update_index":
-            guard = _guard_kb_write(user_id, kb_id)
+            guard = _guard_kb_write(user_id, kb_id, owner_id)
             if guard:
                 return guard
 
@@ -1195,8 +1276,8 @@ async def mcp_call_tool(body: ToolCallRequest, request: Request):
             if len(content_text) > 1_000_000:
                 return {"content": [{"type": "text", "text": "Error: content exceeds 1MB limit"}], "isError": True}
 
-            async with _get_kb_write_lock(user_id, kb_id):
-                kb_path = kb_manager.get_kb_path(user_id, kb_id)
+            async with _get_kb_write_lock(owner_id, kb_id):
+                kb_path = kb_manager.get_kb_path(owner_id, kb_id)
                 wiki_dir = kb_path / "wiki"
                 wiki_dir.mkdir(parents=True, exist_ok=True)
                 index_path = wiki_dir / "_index.md"
@@ -1242,7 +1323,7 @@ async def mcp_call_tool(body: ToolCallRequest, request: Request):
 @app.get("/mcp/v1/resources")
 async def mcp_list_resources(request: Request):
     """List available MCP resources"""
-    user_id, kb_id, _ = _get_user_context(request)
+    user_id, kb_id, owner_id, _ = _get_user_context(request)
     resources = []
 
     resources.append({
@@ -1251,7 +1332,7 @@ async def mcp_list_resources(request: Request):
         "mimeType": "text/markdown"
     })
 
-    kb_path = kb_manager.get_kb_path(user_id, kb_id)
+    kb_path = kb_manager.get_kb_path(owner_id, kb_id)
     articles_dir = kb_path / "wiki" / "_articles"
 
     if articles_dir.exists():
@@ -1268,19 +1349,19 @@ async def mcp_list_resources(request: Request):
 @app.get("/mcp/v1/resources/{uri:path}")
 async def mcp_read_resource(uri: str, request: Request):
     """Read an MCP resource by URI"""
-    user_id, kb_id, _ = _get_user_context(request)
+    user_id, kb_id, owner_id, _ = _get_user_context(request)
 
     if uri.startswith(f"kb://{kb_id}/"):
         decoded_uri = unquote(uri)
         path = decoded_uri.replace(f"kb://{kb_id}/", "")
 
         if path == "index":
-            file_path = kb_manager.get_kb_path(user_id, kb_id) / "wiki" / "_index.md"
+            file_path = kb_manager.get_kb_path(owner_id, kb_id) / "wiki" / "_index.md"
         elif path.startswith("articles/"):
             article_name = _sanitize_path_component(path.replace("articles/", ""))
             if not article_name:
                 raise HTTPException(status_code=400, detail="Invalid article name")
-            file_path = kb_manager.get_kb_path(user_id, kb_id) / "wiki" / "_articles" / f"{article_name}.md"
+            file_path = kb_manager.get_kb_path(owner_id, kb_id) / "wiki" / "_articles" / f"{article_name}.md"
         else:
             raise HTTPException(status_code=404, detail="Resource not found")
         
@@ -1301,10 +1382,11 @@ async def mcp_read_resource(uri: str, request: Request):
 
 @app.get("/api/v1/knowledge-bases")
 async def list_knowledge_bases(request: Request):
-    """List all knowledge bases for a user"""
-    user_id, _, __ = _get_user_context(request)
-    kbs = kb_manager.list_knowledge_bases(user_id)
-    return {"knowledge_bases": kbs}
+    """List all knowledge bases for a user (owned + shared)"""
+    user_id, _, __, ___ = _get_user_context(request)
+    owned = kb_manager.list_knowledge_bases(user_id)
+    shared = kb_manager.list_shared_kbs(user_id)
+    return {"knowledge_bases": owned, "shared_knowledge_bases": shared}
 
 
 @app.post("/api/v1/knowledge-bases")
@@ -1341,7 +1423,8 @@ async def provision_knowledge_base(request: Request):
                 sub.mkdir(parents=True, exist_ok=True)
 
             (kb_path / ".kbaconfig").write_text(
-                f"name: {kb_id}\nversion: '1.0'\n", encoding="utf-8"
+                f"name: {kb_id}\nversion: '1.0'\nowner: {user_id}\nmembers: []\n",
+                encoding="utf-8",
             )
             log.info(
                 "kb_provisioned",
@@ -1360,6 +1443,101 @@ async def provision_knowledge_base(request: Request):
         "status": "exists" if already_exists else "created",
         "path": str(kb_path),
     }
+
+
+@app.post("/api/v1/knowledge-bases/members")
+async def add_kb_member(request: Request):
+    """
+    Add or update a member on a KB.
+    Requester (X-User-ID) must be the KB owner.
+    Body: {member_user_id: str, role: "read"|"write"}
+    """
+    import yaml
+
+    user_id = _sanitize_id(request.headers.get("X-User-ID", ""))
+    kb_id = _sanitize_id(request.headers.get("X-KB-ID", ""))
+    if not user_id or not kb_id:
+        raise HTTPException(status_code=400, detail="X-User-ID and X-KB-ID headers required")
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    member_user_id = _sanitize_id(body.get("member_user_id", ""))
+    role = body.get("role", "read")
+    if not member_user_id:
+        raise HTTPException(status_code=400, detail="member_user_id is required")
+    if role not in ("read", "write"):
+        raise HTTPException(status_code=400, detail="role must be 'read' or 'write'")
+
+    if not kb_manager.kb_exists(user_id, kb_id):
+        raise HTTPException(status_code=404, detail="Knowledge base not found")
+
+    config = kb_manager.get_kb_config(user_id, kb_id)
+    if config.get("owner", user_id) != user_id:
+        raise HTTPException(status_code=403, detail="Only the KB owner can manage members")
+
+    members = config.get("members", []) or []
+    updated = False
+    for m in members:
+        if m.get("user_id") == member_user_id:
+            m["role"] = role
+            updated = True
+            break
+    if not updated:
+        members.append({"user_id": member_user_id, "role": role})
+
+    config["members"] = members
+    kb_path = kb_manager.get_kb_path(user_id, kb_id)
+    try:
+        (kb_path / ".kbaconfig").write_text(yaml.safe_dump(config), encoding="utf-8")
+    except Exception as exc:
+        log.error("add_kb_member_write_failed", extra={"error": str(exc)})
+        raise HTTPException(status_code=500, detail="Failed to update KB config")
+
+    return {"kb_id": kb_id, "member_user_id": member_user_id, "role": role,
+            "action": "updated" if updated else "added"}
+
+
+@app.delete("/api/v1/knowledge-bases/members/{member_user_id}")
+async def remove_kb_member(member_user_id: str, request: Request):
+    """
+    Remove a member from a KB.
+    Requester (X-User-ID) must be the KB owner.
+    """
+    import yaml
+
+    user_id = _sanitize_id(request.headers.get("X-User-ID", ""))
+    kb_id = _sanitize_id(request.headers.get("X-KB-ID", ""))
+    if not user_id or not kb_id:
+        raise HTTPException(status_code=400, detail="X-User-ID and X-KB-ID headers required")
+
+    safe_member = _sanitize_id(member_user_id)
+    if not safe_member:
+        raise HTTPException(status_code=400, detail="Invalid member_user_id")
+
+    if not kb_manager.kb_exists(user_id, kb_id):
+        raise HTTPException(status_code=404, detail="Knowledge base not found")
+
+    config = kb_manager.get_kb_config(user_id, kb_id)
+    if config.get("owner", user_id) != user_id:
+        raise HTTPException(status_code=403, detail="Only the KB owner can manage members")
+
+    members = config.get("members", []) or []
+    new_members = [m for m in members if m.get("user_id") != safe_member]
+    if len(new_members) == len(members):
+        raise HTTPException(status_code=404, detail="Member not found")
+
+    config["members"] = new_members
+    kb_path = kb_manager.get_kb_path(user_id, kb_id)
+    try:
+        (kb_path / ".kbaconfig").write_text(yaml.safe_dump(config), encoding="utf-8")
+    except Exception as exc:
+        log.error("remove_kb_member_write_failed", extra={"error": str(exc)})
+        raise HTTPException(status_code=500, detail="Failed to update KB config")
+
+    return {"kb_id": kb_id, "member_user_id": safe_member, "action": "removed"}
 
 
 @app.get("/health")
