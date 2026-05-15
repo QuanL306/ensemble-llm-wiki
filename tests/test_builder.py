@@ -156,9 +156,8 @@ class TestChunkDocument:
 
 class TestCompileWithRetry:
     """
-    API retry wrapper: RuntimeError triggers retry, any other
-    exception fails immediately.  No SDK dependency — retry
-    logic resides in core/llm._retry_with_backoff.
+    API retry wrapper: LLMTransientError triggers retry,
+    LLMPermanentError fails immediately.
     """
 
     def test_success_on_first_call_returns_article(self):
@@ -170,15 +169,16 @@ class TestCompileWithRetry:
         assert error is None
         assert result == expected
 
-    def test_retries_after_runtime_error_then_succeeds(self):
-        """RuntimeError triggers retry; succeed on second attempt."""
+    def test_retries_after_transient_error_then_succeeds(self):
+        """LLMTransientError triggers retry; succeed on second attempt."""
         call_count = 0
+        from core.llm import LLMTransientError
 
         def side_effect(*args, **kwargs):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                raise RuntimeError("transient failure")
+                raise LLMTransientError("transient failure")
             return "# Article after retry"
 
         with patch.object(cli, "_compile_document", side_effect=side_effect), \
@@ -191,14 +191,15 @@ class TestCompileWithRetry:
         assert result == "# Article after retry"
         assert call_count == 2, f"Expected 2 calls (1 fail + 1 success), got {call_count}"
 
-    def test_non_runtime_error_fails_immediately(self):
-        """ValueError (or any non-RuntimeError) must NOT be retried."""
+    def test_permanent_error_fails_immediately(self):
+        """LLMPermanentError must NOT be retried."""
         call_count = 0
+        from core.llm import LLMPermanentError
 
         def side_effect(*args, **kwargs):
             nonlocal call_count
             call_count += 1
-            raise ValueError("bad input")
+            raise LLMPermanentError("bad auth")
 
         with patch.object(cli, "_compile_document", side_effect=side_effect), \
              patch("time.sleep"):
@@ -209,15 +210,16 @@ class TestCompileWithRetry:
         assert result is None
         assert error is not None
         assert call_count == 1, (
-            f"Expected exactly 1 call (no retry for ValueError), got {call_count}"
+            f"Expected exactly 1 call (no retry for permanent), got {call_count}"
         )
 
     def test_exhausted_retries_returns_error_string(self):
         """After all retries fail, returns (None, non-empty error string)."""
+        from core.llm import LLMTransientError
         with patch.object(
             cli,
             "_compile_document",
-            side_effect=RuntimeError("persistent failure"),
+            side_effect=LLMTransientError("persistent failure"),
         ), patch("time.sleep"):
             result, error = cli._compile_with_retry(
                 "deepseek", "deepseek-chat", {}, "/tmp", max_retries=2
