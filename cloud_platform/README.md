@@ -10,7 +10,7 @@ Expose your knowledge base to teams or external users via a secure HTTP API — 
 - Monthly usage quotas (auto-reset at month boundary via Redis TTL)
 - Per-minute rate limiting (Lua atomic script)
 - Input validation: title ≤ 200 chars, content ≤ 1 MB, search limit ≤ 50
-- Inline synthesis: `kb_query` returns a synthesised answer (when `ANTHROPIC_API_KEY` is set)
+- Inline synthesis: `kb_query` returns a synthesised answer (when any LLM API key is set)
 - Chapter-level chunk scoring — books surface relevant sections, not just titles
 - Write-back tools: AI clients can create articles, append notes, and update the index
 - Security: path traversal prevention + KB ownership guard on all write operations
@@ -41,7 +41,7 @@ Expose your knowledge base to teams or external users via a secure HTTP API — 
               │  • Reads headers only (secure) │
               │  • _guard_kb_write() on writes │
               │  • KnowledgeBaseManager        │
-              │  • Inline synthesis (Haiku)    │
+              │  • Inline LLM synthesis        │
               └──────────────┬───────────────┘
                              │
               ┌──────────────┴───────────────┐
@@ -137,11 +137,12 @@ python src/server/mcp_http_server.py   # port 8001
 ### Enable Inline Synthesis
 
 ```bash
-# Set in the MCP server's environment
-export ANTHROPIC_API_KEY=sk-ant-...
+# Set any supported LLM API key in the MCP server's environment
+export DEEPSEEK_API_KEY=sk-...         # DeepSeek (recommended — fast + cheap)
+# or: OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, KIMI_API_KEY, etc.
 ```
 
-When set, `kb_query` calls `claude-haiku-4-5` to synthesise a direct 2–4 sentence answer from the top-3 results before returning the source list.
+When set, `kb_query` synthesises a direct 2–4 sentence answer from the top-3 results before returning the source list. See [LLM API Key Setup in QUICKSTART.md](../QUICKSTART.md) for all supported providers.
 
 ---
 
@@ -221,7 +222,7 @@ curl -X POST http://api.example.com/mcp/v1/tools/call \
   -d '{"name": "kb_query", "arguments": {"question": "How does sleep affect memory?"}}'
 ```
 
-Response includes a synthesised answer (if `ANTHROPIC_API_KEY` is set) followed by ranked sources with chapter-level hints.
+Response includes a synthesised answer (if any LLM API key is set) followed by ranked sources with chapter-level hints.
 
 #### `kb_search` — Keyword Browse
 
@@ -328,10 +329,10 @@ Build locally, then push to the server:
 
 ```bash
 # Preview first
-python src/cli.py deploy --host myserver.com --remote-user alice --dry-run
+kb deploy --host myserver.com --remote-user alice --dry-run
 
 # Deploy
-python src/cli.py deploy --host myserver.com --remote-user alice --kb-id my-research
+kb deploy --host myserver.com --remote-user alice --kb-id my-research
 
 # Then users access it with:
 # X-API-Key: kb_live_xxx
@@ -371,8 +372,11 @@ API_KEY_SALT=another-secret
 RATE_LIMIT_DEFAULT=100    # requests per minute
 QUOTA_DEFAULT=10000       # requests per month
 
-# Optional: inline synthesis in MCP server
-ANTHROPIC_API_KEY=sk-ant-...
+# Optional: inline synthesis in MCP server (any one of these)
+DEEPSEEK_API_KEY=sk-...
+# OPENAI_API_KEY=sk-...
+# ANTHROPIC_API_KEY=sk-ant-...
+# GEMINI_API_KEY=AIza...
 
 # Logging
 LOG_LEVEL=INFO       # DEBUG | INFO | WARNING | ERROR
@@ -391,7 +395,7 @@ MCP_SERVER_PORT=8001
 | `docker-compose up` fails | Check `.env` has all required variables |
 | 401 Unauthorized | API key not in Redis; run `admin.py create-key` |
 | 403 on write tools | KB does not exist under this user_id; deploy with `cli.py deploy` first |
-| No synthesis in query response | Set `ANTHROPIC_API_KEY` in MCP server environment |
+| No synthesis in query response | Set any LLM API key in MCP server environment — see [QUICKSTART.md](../QUICKSTART.md) |
 | Rate limit exceeded | Check usage stats; adjust `--rate-limit` when creating key |
 | 503 on all authenticated requests | Redis is down — restore Redis, then retry |
 | `/health` shows `"redis": "unavailable"` | Redis unreachable; auth and rate-limiting are blocked until Redis recovers |

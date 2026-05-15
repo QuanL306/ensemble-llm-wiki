@@ -5,7 +5,7 @@ Build structured, Obsidian-compatible knowledge bases from your documents — an
 ## Features
 
 - **Multi-format ingestion**: PDF (text + OCR), EPUB, Markdown, TXT
-- **LLM-driven compilation**: Claude writes real wiki articles with analysis, cross-references, and retrieval hints
+- **LLM-driven compilation**: LLM writes real wiki articles with analysis, cross-references, and retrieval hints
 - **Semantic retrieval index**: 15 LLM-generated retrieval queries per document, stored in the index for fast keyword-semantic scoring
 - **Chapter-level chunking**: Long documents (books) split into sections — each chapter becomes independently retrievable
 - **Skill Seekers integration**: Fetch knowledge from 17+ source types (documentation sites, GitHub, video, PDFs, and more)
@@ -16,7 +16,7 @@ Build structured, Obsidian-compatible knowledge bases from your documents — an
 ### `init` — Initialize
 
 ```bash
-python cli.py init <folder_path> [--name <name>]
+kb init <folder_path> [--name <name>]
 ```
 
 Creates the directory structure:
@@ -41,7 +41,7 @@ my-research/
 ### `ingest` — Extract and Index Documents
 
 ```bash
-python cli.py ingest [--full]
+kb ingest [--full]
 ```
 
 Scans `raw/` and extracts content from all supported documents.
@@ -59,7 +59,7 @@ For each document, stores in `file_index.json`:
 ### `compile` — Regex-based Wiki Compilation
 
 ```bash
-python cli.py compile [--full]
+kb compile [--full]
 ```
 
 Fast structural scaffold with no API key required. Generates document summaries and concept articles using regex extraction. Use `compile-llm` for production-quality output.
@@ -69,12 +69,12 @@ Fast structural scaffold with no API key required. Generates document summaries 
 ### `compile-llm` — LLM-driven Wiki Compilation ⭐
 
 ```bash
-python cli.py compile-llm [options]
+kb compile-llm [options]
 ```
 
 Uses Claude to write genuine wiki articles — analysis, cross-references, and retrieval hints — replacing the regex scaffold with real semantic understanding.
 
-**Requirements**: `ANTHROPIC_API_KEY` environment variable, `pip install anthropic`
+**Requirements**: any LLM API key — see [LLM API Key Setup in QUICKSTART.md](../QUICKSTART.md)
 
 **Steps** (all run by default; pass a flag to run only that step):
 
@@ -102,14 +102,14 @@ Long documents are split into sections (chapters, Markdown headers, or 600-word 
 **Options:**
 
 ```bash
-python cli.py compile-llm                       # all three steps
-python cli.py compile-llm --docs                # articles only
-python cli.py compile-llm --docs --no-index     # articles, skip auto-index
-python cli.py compile-llm --index               # rebuild index only
-python cli.py compile-llm --concepts            # concept pages only
-python cli.py compile-llm --full -y             # recompile everything, no prompt
-python cli.py compile-llm --model claude-opus-4-5
-python cli.py compile-llm --concept-limit 30
+kb compile-llm                       # all three steps
+kb compile-llm --docs                # articles only
+kb compile-llm --docs --no-index     # articles, skip auto-index
+kb compile-llm --index               # rebuild index only
+kb compile-llm --concepts            # concept pages only
+kb compile-llm --full -y             # recompile everything, no prompt
+kb compile-llm --model claude-opus-4-5
+kb compile-llm --concept-limit 30
 ```
 
 **Cost estimate** is shown before any API calls. Confirm with `y` or skip with `--yes`.
@@ -120,8 +120,8 @@ python cli.py compile-llm --concept-limit 30
 - Re-run with `--retry-failed` to retry them; `--full` to recompile everything
 
 ```bash
-python cli.py compile-llm --retry-failed   # retry previously failed docs
-python cli.py compile-llm --full -y        # recompile everything
+kb compile-llm --retry-failed   # retry previously failed docs
+kb compile-llm --full -y        # recompile everything
 ```
 
 `status` shows compile failures with error details:
@@ -135,7 +135,7 @@ python cli.py compile-llm --full -y        # recompile everything
 ### `search` — Test Keyword Search Locally
 
 ```bash
-python cli.py search <query> [--limit N]
+kb search <query> [--limit N]
 ```
 
 Searches `file_index.json` using the same scoring as the MCP servers — no server needed. Useful for verifying retrieval quality before deploying.
@@ -150,8 +150,8 @@ Searches `file_index.json` using the same scoring as the MCP servers — no serv
 Results show **which retrieval query matched** so you can see exactly why a document ranked.
 
 ```bash
-python cli.py search "monetary policy inflation"
-python cli.py search "attention mechanism transformers" --limit 10
+kb search "monetary policy inflation"
+kb search "attention mechanism transformers" --limit 10
 ```
 
 ---
@@ -159,7 +159,7 @@ python cli.py search "attention mechanism transformers" --limit 10
 ### `lint` — Wiki Health Check
 
 ```bash
-python cli.py lint
+kb lint
 ```
 
 Static checks — no API calls:
@@ -174,7 +174,7 @@ Static checks — no API calls:
 ### `clean` — Remove Stale Index Entries
 
 ```bash
-python cli.py clean [--dry-run] [--articles]
+kb clean [--dry-run] [--articles]
 ```
 
 For every index entry whose source file no longer exists on disk:
@@ -189,7 +189,7 @@ Always preview with `--dry-run` first.
 ### `status` — Show Status
 
 ```bash
-python cli.py status
+kb status
 ```
 
 Shows document counts, LLM compile coverage (`🤖 LLM compiled: 12 / 20`), and directory status.
@@ -199,7 +199,7 @@ Shows document counts, LLM compile coverage (`🤖 LLM compiled: 12 / 20`), and 
 ### `fetch` — Fetch from Any Source
 
 ```bash
-python cli.py fetch <source> [options]
+kb fetch <source> [options]
 ```
 
 Scrapes any source via Skill Seekers, deposits Markdown in `raw/skill_seekers/<slug>/`, and auto-ingests.
@@ -212,15 +212,15 @@ Scrapes any source via Skill Seekers, deposits Markdown in `raw/skill_seekers/<s
 | `--compile` | Also run `compile` after ingesting |
 
 ```bash
-python cli.py fetch https://fastapi.tiangolo.com/
-python cli.py fetch tiangolo/fastapi --name fastapi
-python cli.py fetch https://docs.langchain.com/ --async --compile
+kb fetch https://fastapi.tiangolo.com/
+kb fetch tiangolo/fastapi --name fastapi
+kb fetch https://docs.langchain.com/ --async --compile
 ```
 
 ### `fetch-list` — List Fetched Skills
 
 ```bash
-python cli.py fetch-list
+kb fetch-list
 ```
 
 ---
@@ -228,7 +228,7 @@ python cli.py fetch-list
 ### `deploy` — Sync Wiki to Cloud Server
 
 ```bash
-python cli.py deploy [options]
+kb deploy [options]
 ```
 
 Pushes `wiki/` to a remote server via rsync/SSH so third-party users can access it through the cloud MCP API.
@@ -261,9 +261,9 @@ Environment variable equivalents: `KBA_DEPLOY_HOST`, `KBA_DEPLOY_REMOTE_USER`, `
 Use `--force` to skip the check in automated pipelines.
 
 ```bash
-python cli.py deploy --host myserver.com --remote-user alice --dry-run
-python cli.py deploy --host myserver.com --remote-user alice --quiet
-python cli.py deploy --host myserver.com --remote-user alice --force   # skip conflict check
+kb deploy --host myserver.com --remote-user alice --dry-run
+kb deploy --host myserver.com --remote-user alice --quiet
+kb deploy --host myserver.com --remote-user alice --force   # skip conflict check
 ```
 
 ---
@@ -330,15 +330,14 @@ ingest:
 pip install -r requirements.txt
 
 # Optional: OCR for scanned PDFs
-brew install tesseract tesseract-lang   # macOS
-sudo apt-get install tesseract-ocr      # Ubuntu
-
-# Optional: LLM compilation
-pip install anthropic
+brew install tesseract poppler   # macOS
+sudo apt install tesseract-ocr poppler-utils   # Ubuntu/Debian
 
 # Optional: web/GitHub/video ingestion
 pip install skill-seekers[all]
 ```
+
+Set any supported LLM API key before running `compile-llm` — see [LLM API Key Setup in QUICKSTART.md](../QUICKSTART.md).
 
 ---
 
@@ -347,7 +346,7 @@ pip install skill-seekers[all]
 | Problem | Solution |
 |---------|----------|
 | Scanned PDF not recognized | Install Tesseract (see above) |
-| `compile-llm` fails | Check `ANTHROPIC_API_KEY`; `pip install anthropic` |
+| `compile-llm` fails | Check that an LLM API key is set — see [QUICKSTART.md](../QUICKSTART.md) |
 | `compile-llm` shows `❌ LLM compile failed` | Run `compile-llm --retry-failed`; check error in `status` |
 | `skill-seekers` not found | `pip install skill-seekers` |
 | Encoding issues | `iconv -f GBK -t UTF-8 input.txt > output.txt` |

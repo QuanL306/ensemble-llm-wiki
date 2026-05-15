@@ -13,6 +13,11 @@ Get up and running with Knowledge Base Suite in minutes.
 git clone https://github.com/QuanL306/ensemble-llm-wiki.git
 cd ensemble-llm-wiki
 
+# (Recommended) create an isolated virtual environment first
+python3 -m venv .venv
+source .venv/bin/activate    # macOS/Linux
+# .venv\Scripts\activate     # Windows
+
 # Install all dependencies
 pip install -r requirements.txt
 
