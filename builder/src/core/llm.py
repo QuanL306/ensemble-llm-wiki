@@ -78,11 +78,42 @@ _AUTO_PRIORITY = ["deepseek", "openai", "kimi", "claude", "gemini", "zhipu", "mi
 
 # ── Public API ───────────────────────────────────────────────────
 
+def _resolve_api_key(backend_name: str) -> Optional[str]:
+    """Get API key for a backend, checking primary env var + fallbacks."""
+    cfg = BACKENDS[backend_name]
+    key = os.environ.get(cfg["api_key_env"], "")
+    if key:
+        return key
+    # ── Fallbacks for known backends ──
+    if backend_name == "kimi":
+        # KIMI_API_KEY (platform.kimi.com) or KIMI_MOONSHOT_API_KEY (legacy Moonshot)
+        for fb in ("KIMI_API_KEY", "KIMI_MOONSHOT_API_KEY"):
+            key = os.environ.get(fb, "")
+            if key:
+                return key
+    return ""
+
+
+def _resolve_base_url(backend_name: str) -> str:
+    """Get base URL, allowing env var override (KIMI_BASE_URL etc.)."""
+    cfg = BACKENDS[backend_name]
+    override_env = f"{backend_name.upper()}_BASE_URL"
+    return os.environ.get(override_env, cfg["base_url"])
+
+
 def detect_backend() -> Optional[str]:
-    """Auto-detect which backend has an API key available."""
+    """Auto-detect which backend has an API key available.
+
+    Respects LLM_BACKEND env var if set (explicit override).
+    """
+    # Explicit override
+    explicit = os.environ.get("LLM_BACKEND", "").lower()
+    if explicit and explicit in BACKENDS and _resolve_api_key(explicit):
+        return explicit
+
+    # Auto-detect
     for name in _AUTO_PRIORITY:
-        cfg = BACKENDS[name]
-        if os.environ.get(cfg["api_key_env"]):
+        if _resolve_api_key(name):
             return name
     return None
 
@@ -90,7 +121,7 @@ def detect_backend() -> Optional[str]:
 def list_available() -> List[str]:
     """List backends with API keys available."""
     return [name for name in _AUTO_PRIORITY
-            if os.environ.get(BACKENDS[name]["api_key_env"])]
+            if _resolve_api_key(name)]
 
 
 def chat(
@@ -124,7 +155,8 @@ def chat(
         )
 
     cfg = BACKENDS[backend]
-    api_key = os.environ.get(cfg["api_key_env"], "")
+    api_key = _resolve_api_key(backend)
+    base_url = _resolve_base_url(backend)
     if not api_key:
         raise RuntimeError(f"{cfg['api_key_env']} is not set for backend '{backend}'")
 
@@ -134,22 +166,22 @@ def chat(
     try:
         if provider == "openai-compat":
             result = _call_openai_compat(
-                cfg["base_url"], api_key, actual_model,
+                base_url, api_key, actual_model,
                 prompt, system, temperature, max_tokens, backend,
             )
         elif provider == "anthropic":
             result = _call_anthropic(
-                cfg["base_url"], api_key, actual_model,
+                base_url, api_key, actual_model,
                 prompt, system, temperature, max_tokens,
             )
         elif provider == "gemini":
             result = _call_gemini(
-                cfg["base_url"], api_key, actual_model,
+                base_url, api_key, actual_model,
                 prompt, system, temperature, max_tokens,
             )
         elif provider == "minimax":
             result = _call_minimax(
-                cfg["base_url"], api_key, actual_model,
+                base_url, api_key, actual_model,
                 prompt, system, temperature, max_tokens,
             )
         else:
