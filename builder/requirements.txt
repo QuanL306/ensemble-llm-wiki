@@ -1,4 +1,10 @@
 # Knowledge Base Builder - Requirements
+#
+# NOTE: End users should install from the root requirements.txt instead:
+#   pip install -r requirements.txt   (from repo root)
+#
+# This file is kept as a reference for the builder component's direct
+# dependencies. It does not include jieba, graphifyy, or fastembed.
 
 # Core dependencies
 PyYAML>=6.0

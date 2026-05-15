@@ -16,11 +16,16 @@ cd ensemble-llm-wiki
 # Install all dependencies
 pip install -r requirements.txt
 
-# Add the repo to your PATH so the 'kb' command works from any directory
-# macOS / Linux — add to ~/.zshrc or ~/.bashrc:
-export PATH="$PATH:$(pwd)"
+# System dependencies for PDF processing (not installed by pip):
+#   macOS:  brew install tesseract poppler
+#   Linux:  sudo apt install tesseract-ocr poppler-utils
 
-# Windows — add the cloned folder to your system PATH, or run kb.bat directly
+# Add the repo to your PATH so the 'kb' command works from any directory.
+# Replace /path/to with the actual location where you cloned the repo.
+# macOS / Linux — paste the export line into ~/.zshrc or ~/.bashrc:
+export PATH="$PATH:/path/to/knowledge-base-suite-en"
+
+# Windows — add the cloned folder to your system PATH, or invoke kb.bat directly
 
 # Optional extras
 pip install -r local-server/requirements.txt    # local MCP server
@@ -140,8 +145,8 @@ kb compile-llm --model claude-opus-4-7
 
 # 2. Start the local MCP server (from the cloned repo)
 cd local-server/src
-python server.py --kb-path ~/my-research    # single KB
-python server.py --kb-root ~/knowledge-bases # or point at a folder of KBs
+python3 server.py --kb-path ~/my-research    # single KB
+python3 server.py --kb-root ~/knowledge-bases # or point at a folder of KBs
 
 # 3. Configure Claude Desktop: add to claude_desktop_config.json
 # {
@@ -293,7 +298,9 @@ my-research/
 | `skill-seekers` not found | `pip install skill-seekers` |
 | `compile-llm` fails | Set at least one LLM API key (see **LLM API Key Setup**); no extra SDK needed |
 | Permission denied on CLI | `chmod +x builder/src/cli.py` |
-| Port already in use (server) | `python server.py --port 8001` |
+| Port already in use (server) | `python3 server.py --port 8001` |
+| Scanned PDFs fail (pdf2image) | `brew install poppler` (macOS) or `apt install poppler-utils` |
+| Semantic search not working | `pip install fastembed` (optional; enables embedding-based ranking) |
 | Large PDFs slow | Process in batches; consider splitting large files first |
 | `deploy` SSH auth fails | Check `--key` path; ensure remote user has write access to `/data/knowledge-bases/` |
 

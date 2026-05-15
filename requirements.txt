@@ -27,7 +27,15 @@ jieba>=0.42
 # Installs networkx, scipy, datasketch, rapidfuzz as sub-dependencies
 graphifyy>=0.8.0
 
+# Semantic search / embedding (optional — improves kb_query ranking beyond TF-IDF)
+# Without this, search falls back to pure keyword TF-IDF (still works well).
+# fastembed>=0.3.0
+
 # Skill Seekers integration (optional — for `kb fetch` command)
 # Basic install:  pip install skill-seekers
 # Full install:   pip install skill-seekers[all]
 # skill-seekers>=3.5.0
+
+# System dependencies (not installed by pip — install separately):
+#   macOS:  brew install tesseract poppler
+#   Linux:  sudo apt install tesseract-ocr poppler-utils

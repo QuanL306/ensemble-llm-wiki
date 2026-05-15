@@ -196,7 +196,7 @@ class WikiCompiler:
 
         # 4. jieba segmentation with POS tagging — keep only nouns
         try:
-            import jieba.posseg as pseg
+            import jieba.posseg as pseg  # requires: pip install jieba
             word_freq: dict = {}
             for pair in pseg.cut(text):
                 w = pair.word.strip()
