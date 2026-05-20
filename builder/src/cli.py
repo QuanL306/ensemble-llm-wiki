@@ -19,6 +19,9 @@ from core.ingest import DataIngest
 from core.compiler import WikiCompiler
 from core.indexer import IndexManager
 from core.skill_seekers import SkillSeekersIntegration, SkillSeekersNotInstalledError, SkillSeekersFetchError
+from core.prompts import _PROMPT_DOCUMENT, _PROMPT_INDEX, _PROMPT_CONCEPTS
+from core.chaptered import (_CHAPTER_SPLIT_PATTERNS, _split_into_chapters,
+                             _compile_document_chaptered)
 
 
 def load_config(kb_path: str) -> dict:
@@ -425,200 +428,16 @@ def cmd_harvest(args):
 # LLM-driven compilation
 # ============================================================
 
-# ---------- prompts -----------------------------------------
-
-_PROMPT_DOCUMENT = """\
-You are a knowledge curator building a personal research wiki in Obsidian.
-
-PRIMARY READERS:
-1. An AI assistant that will later search this wiki to answer research \
-questions — it reads the Summary to decide relevance, then digs deeper.
-2. The human researcher who built this KB and wants to reference and \
-build on ideas across documents.
-
-PRIMARY RULE: Be specific. Never say "this work explores X" without \
-immediately stating what it specifically concludes about X.
-
-Document: {name}  (~{word_count} words)
-
-DOCUMENT TEXT:
-{text}
-
----
-
-Write the wiki article now using this exact structure:
-
-```yaml
----
-title: "{name_clean}"
-type: book|paper|article|report|other
-tags: [{tags}]
-word_count: {word_count}
-compiled: {date}
----
-```
-
-## Summary
-
-One paragraph. Answer three things:
-(1) What specific question or problem does this address?
-(2) What is the author's specific answer — the actual claim, not a \
-paraphrase of the topic?
-(3) What makes this work's perspective distinctive compared to conventional \
-wisdom on this topic?
-If the source text was cut off or unclear in places, note that honestly here.
-
-## Core Arguments
-
-Number each major argument. For each one:
-- **Claim**: what exactly is being asserted (be precise, not generic)
-- **Evidence type**: experiment / case study / historical analysis / \
-statistical data / logical argument / personal observation
-- **Key caveat**: any limitation or counter-argument the author acknowledges
-
-## Author's Terminology
-
-Terms this author introduces or uses in a distinctive, non-standard way.
-Each one wrapped in [[double brackets]] — these become navigable links.
-Format: **[[term]]** — how the author defines or uses it specifically here.
-
-## Evidence & Data
-
-Concrete specifics only. Named experiments, exact statistics with their \
-sources, specific dates, named people or organizations, particular case \
-studies. Vague references ("studies show...") do not belong here.
-
-## Key Quotes
-
-2–4 verbatim quotes. Select lines that are maximally insight-dense — \
-the ones where the author's thinking is sharpest.
-Format: > "exact quote" — [chapter / page / section if available]
-
-## Connections
-
-How these ideas interact with other fields, debates, or works.
-Be specific: not "this relates to psychology" but "this challenges \
-[[cognitive bias]] research by arguing that..."
-Use [[double brackets]] for every concept worth linking.
-
-## What This Doesn't Cover
-
-Honest gaps this article must flag:
-- What the author explicitly sets out of scope
-- Acknowledged weaknesses in the evidence or argument
-- What a thoughtful critic would say is missing
-- What follow-up work the author themselves calls for
-
-## For Future Queries
-
-Write exactly 15 retrieval hints — one sentence each. Every sentence must \
-be specific to this document; never write a placeholder like "[topic]".
-Use the author's actual vocabulary so keyword matching works well.
-
-These hints will be stored in the search index and used verbatim to match \
-incoming research queries, so precision matters.
-
-Write 5 hints from each of these three angles:
-
-**Conceptual** (what ideas / arguments / findings this work addresses):
-"If someone asks about [specific concept], this document is relevant because [specific reason]."
-
-**Methodological / evidence** (how the work argues, what data or cases it uses):
-"If someone researching [specific method or evidence type], this document is relevant because [specific reason]."
-
-**Application / implication** (what the work means for practice or related problems):
-"If someone wants to [specific action or application], this document is relevant because [specific reason]."
-
-Number the 15 hints 1–15. No category headers in the output — just the 15 numbered sentences.
-"""
-
-_PROMPT_INDEX = """\
-You are writing the master navigation file for a personal research knowledge \
-base. An AI assistant reads this index FIRST whenever it needs to answer a \
-research question — it must be able to determine in one scan which documents \
-are relevant and where to look.
-
-Current articles (frontmatter + summary + retrieval hints):
-
-{summaries}
-
-Write _index.md with this structure:
-
-## About This Knowledge Base
-2–3 sentences: what territory does this KB cover? What are its primary \
-questions? What would be a poor use of this KB?
-
-## Topic Map
-Group documents into 3–7 thematic clusters. For each cluster:
-### [Theme Name]
-- [[Document Title]] — one sentence: what specific claim or data does it add?
-
-## Core Concepts
-The [[concepts]] that appear across multiple documents. These are the \
-intellectual backbone — entry points for navigating the KB.
-List each with a one-line role: what role does this concept play in the KB?
-
-## Synthesis Questions
-5 questions that require reading multiple documents together to answer. \
-Ground each question in actual document titles and concepts:
-Example: "How does [[System 1]] thinking (Kahneman) interact with \
-[[choice architecture]] (Thaler) in practice?"
-
-## All Documents
-Alphabetical quick-lookup. One line per document:
-- [[Title]] — type, one-sentence description, top 2 tags
-"""
-
-_PROMPT_CONCEPTS = """\
-You are writing concept pages for a personal research knowledge base.
-Below are the most cross-referenced concepts, each shown with actual \
-excerpts from the articles that use it.
-
-{links_data}
-
-Select the top {n} concepts that are genuinely central \
-(skip generic terms like "research" or "analysis"). For each, write a \
-concept article that synthesises how the term is actually used across \
-these specific documents — grounded in the excerpts, not in \
-generic knowledge.
-
-Format for each concept article:
-
----
-title: <concept name>
-type: concept
-source_count: <N>
----
-
-# <concept name>
-
-## Definition
-2–3 sentences defining the term exactly as it is used across these \
-documents. Ground the definition in the excerpts — do not use a generic \
-dictionary definition.
-
-## How Different Sources Use It
-One paragraph showing convergence or tension: do all documents use \
-the term the same way, or do they differ? Quote or paraphrase specific \
-documents by name.
-
-## Source Documents
-- [[Article name]] — one sentence on how this document uses the concept
-
-## Related Concepts
-- [[concept]] — one-line relationship
-
-Separate each concept article with exactly this line:
----CONCEPT_BREAK---
-"""
-
+# Prompt templates and chapter-by-chapter compilation extracted to:
+#   core/prompts.py  (_PROMPT_DOCUMENT, _PROMPT_INDEX, _PROMPT_CONCEPTS)
+#   core/chaptered.py (_split_into_chapters, _compile_document_chaptered)
 
 # ---------- helpers -----------------------------------------
 
-def _llm_client(model_override: str = None):
+def _llm_client(model_override: str = None, backend_override: str = None):
     """Return (backend, model, config) using the unified LLM layer."""
     from core.llm import detect_backend, list_available, BACKENDS, make_config
-    backend = detect_backend()
+    backend = backend_override or detect_backend()
     if backend is None:
         available = list_available()
         if available:
@@ -638,23 +457,44 @@ def _stream_message(backend, model, prompt, max_tokens=4096):
 
 
 def _estimate_cost(files: list, model: str) -> float:
-    """Rough cost estimate in USD based on word count."""
-    # Input pricing (per 1M tokens)
-    if "moonshot" in model or "kimi" in model:
-        price_per_m = 1.65       # Kimi moonshot-v1-8k: ~$1.65/M
-    elif "opus" in model:
-        price_per_m = 15.0
-    elif "haiku" in model:
-        price_per_m = 0.80
+    """Rough cost estimate in USD based on word count and model pricing.
+
+    Prices per 1M input tokens (May 2026). Single-pass books send ~25%
+    of full text (150K chars ≈ 37K tokens); chaptered books (>300K words)
+    send ~400 tokens/chapter × 16 chapters ≈ 6.4K tokens.
+    """
+    model_lower = (model or "").lower()
+
+    # Input pricing per 1M tokens
+    if "kimi" in model_lower or "moonshot" in model_lower:
+        input_price = 1.65
+    elif "deepseek" in model_lower:
+        input_price = 0.27
+    elif "glm" in model_lower or "zhipu" in model_lower:
+        input_price = 1.00
+    elif "opus" in model_lower:
+        input_price = 15.0
+    elif "sonnet" in model_lower:
+        input_price = 3.0
+    elif "haiku" in model_lower:
+        input_price = 0.80
+    elif "gpt-4o" in model_lower:
+        input_price = 2.50
+    elif "gemini" in model_lower:
+        input_price = 0.10
+    elif "minimax" in model_lower or "abab" in model_lower:
+        input_price = 0.50
     else:
-        price_per_m = 3.0
+        input_price = 1.50  # conservative default
+
     total_words = sum(
         f.get("extracted_metadata", {}).get("word_count", 5_000) for f in files
     )
-    # ~1.3 tokens/word input + ~1K tokens output per doc
-    input_tokens = total_words * 1.3
-    output_tokens = len(files) * 1_000
-    return (input_tokens + output_tokens) / 1_000_000 * price_per_m
+    # For single-pass: ~25% of words sent (150K char cap)
+    # Output: ~3000 tokens per doc (post-fix)
+    input_tokens = total_words * 0.33   # ~0.33 tokens/word avg after truncation
+    output_tokens = len(files) * 3_000
+    return (input_tokens * input_price + output_tokens * input_price) / 1_000_000
 
 
 def _clean_extracted_text(raw: str) -> str:
@@ -742,12 +582,7 @@ def _chunk_document(text: str) -> list:
     if len(words) < 5_000:
         return []
 
-    SPLIT_PATTERNS = [
-        re.compile(r'\n=== .{3,100} ===\n'),
-        re.compile(r'\n(?:CHAPTER|Chapter)\s+[\w]+[:\s]*[^\n]{0,60}\n'),
-        re.compile(r'\n(?:PART|Part)\s+[\w]+[:\s]*[^\n]{0,60}\n'),
-        re.compile(r'\n#{2,3} .{3,80}\n'),
-    ]
+    SPLIT_PATTERNS = _CHAPTER_SPLIT_PATTERNS
 
     for pattern in SPLIT_PATTERNS:
         boundaries = [m.start() for m in pattern.finditer(text)]
@@ -891,8 +726,7 @@ def _generate_embeddings(kb_path: str, indexer: 'IndexManager') -> int:
     try:
         from fastembed import TextEmbedding
     except ImportError:
-        print("   ⚠️  fastembed not installed — skipping embeddings")
-        print("      Install with: pip install fastembed")
+        print("   ⚠️  fastembed import failed — skipping embeddings")
         return 0
 
     from core.scoring import build_doc_embed_text, EMBED_TEXT_VERSION
@@ -1021,39 +855,78 @@ def _extract_wiki_links(articles_dir: str) -> dict:
 
 # ---------- LLM compilation steps --------------------------
 
-def _compile_with_retry(backend, model: str, file_info: dict, kb_path: str,
-                        max_retries: int = 3) -> Tuple[Optional[str], Optional[str]]:
-    """
-    Call _compile_document with simple retry for transient failures.
+def _compile_with_retry(backend, model: str, file_info: dict, kb_path: str) -> Tuple[Optional[str], Optional[str]]:
+    """Call _compile_document with error classification only.
+
+    The underlying LLM client (llm.py) already has 3-attempt exponential
+    backoff for HTTP errors. This wrapper classifies failures so the
+    caller can decide whether to skip or record.
 
     Returns (article_text, error_message).
     On success: (text, None).
-    On permanent failure: (None, error_string).
-
-    The underlying LLM client already has exponential backoff for HTTP
-    errors; this outer wrapper catches any remaining exceptions.
+    On failure: (None, error_string).
     """
-    import time
     from core.llm import LLMTransientError, LLMPermanentError
 
-    last_error = ""
-    for attempt in range(max_retries):
-        try:
-            result = _compile_document(backend, model, file_info, kb_path)
-            return result, None
+    try:
+        result = _compile_document(backend, model, file_info, kb_path)
+        return result, None
+    except LLMPermanentError as exc:
+        return None, str(exc)
+    except LLMTransientError as exc:
+        return None, f"LLM error (already retried): {exc}"
+    except Exception as exc:
+        return None, str(exc)
 
-        except LLMPermanentError as exc:        # auth/config failure — never retry
-            return None, str(exc)
 
-        except LLMTransientError as exc:        # rate limit / network — retry
-            last_error = str(exc)
-            print(f"\n   ⏳ LLM error — retrying (attempt {attempt + 1}/{max_retries})...", flush=True)
-            time.sleep(5)
+def _build_graph_context(file_info: dict, kb_path: str) -> str:
+    """Build graph context for a document from graphify edges.
 
-        except Exception as exc:                # unexpected — don't retry
-            return None, str(exc)
+    Reads wiki/graphify-out/edges.jsonl and finds edges where this
+    document appears as source or target.  Formats a compact hint
+    listing related works and their relationships.
 
-    return None, f"Failed after {max_retries} retries: {last_error}"
+    Returns empty string if no graph data exists (backward compatible).
+    """
+    edges_path = os.path.join(kb_path, "wiki", "graphify-out", "edges.jsonl")
+    if not os.path.exists(edges_path):
+        return ""
+    name = file_info.get("name", "")
+    slug = re.sub(r'\.[^.]+$', '', name)
+    slug_norm = slug.lower().replace("_", " ").strip()
+    related = []
+    try:
+        with open(edges_path, "r", encoding="utf-8") as f:
+            for line in f:
+                try:
+                    edge = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                src = edge.get("source_label", "")
+                tgt = edge.get("target_label", "")
+                src_norm = src.lower().replace("_", " ").strip()
+                tgt_norm = tgt.lower().replace("_", " ").strip()
+                relation = edge.get("relation", "related")
+                if slug_norm == src_norm:
+                    related.append((tgt, relation, "→"))
+                elif slug_norm == tgt_norm:
+                    related.append((src, relation, "←"))
+    except Exception:
+        return ""
+    if not related:
+        return ""
+    # Deduplicate and format
+    seen = set()
+    lines = ["## Knowledge Graph Context",
+             "This document is connected to other works in this KB:"]
+    for other, rel, arrow in related[:12]:  # cap at 12 edges
+        key = (other, rel)
+        if key in seen:
+            continue
+        seen.add(key)
+        lines.append(f"  {arrow} [[{other}]] — {rel}")
+    lines.append("Use these connections in the ## Connections section.\n")
+    return "\n".join(lines) + "\n"
 
 
 def _compile_document(backend, model: str, file_info: dict, kb_path: str) -> Optional[str]:
@@ -1070,6 +943,19 @@ def _compile_document(backend, model: str, file_info: dict, kb_path: str) -> Opt
 
     # Strip the noisy heuristic header; send only the real document text
     text = _clean_extracted_text(raw)
+
+    # ── Large book → chapter-by-chapter compilation ──
+    # Single-pass compilation risks timeout for books with very long
+    # chapters that still fit under the 150K char cap but force the LLM
+    # to generate long responses. Chaptered mode is safer and produces
+    # better coverage of the full book.
+    word_count_est = len(text.split())
+    if word_count_est > 300_000:
+        print(f"     massive book ({word_count_est:,} words) → chaptered mode", flush=True)
+        result = _compile_document_chaptered(backend, model, file_info, kb_path)
+        if result is not None:
+            return result
+        # Fall through to single-pass if chaptered returned None
 
     meta = file_info.get("extracted_metadata", {})
     name = file_info.get("name", "Unknown")
@@ -1092,8 +978,10 @@ def _compile_document(backend, model: str, file_info: dict, kb_path: str) -> Opt
     word_count = len(text.split()) if truncated else original_word_count
 
     # Suggest tags from the filename for the prompt (Claude will refine them)
-    stem_words = re.sub(r'[_\-.]', ' ', name_clean).lower().split()
+    stem_words = re.sub(r'[_\-. ]', ' ', name_clean).lower().split()
     tag_hint = ", ".join(w for w in stem_words[:4] if len(w) > 3)
+
+    graph_context = _build_graph_context(file_info, kb_path)
 
     prompt = _PROMPT_DOCUMENT.format(
         name=name,
@@ -1102,8 +990,55 @@ def _compile_document(backend, model: str, file_info: dict, kb_path: str) -> Opt
         tags=tag_hint,
         date=datetime.now().strftime("%Y-%m-%d"),
         text=text,
+        graph_context=graph_context,
     )
-    return _stream_message(backend, model, prompt, max_tokens=6000)
+    return _stream_message(backend, model, prompt, max_tokens=3000)
+
+
+def _append_to_index(kb_path: str, articles_dir: str, kb_name: str):
+    """Append new articles to a simple alphabetical index (no LLM cost).
+
+    Writes _index.md as a plain list grouped by first letter.  Kept
+    deliberately simple — the LLM-powered index (--index) handles
+    thematic clustering, concept maps, and cross-references.
+    """
+    import os, re
+    from datetime import datetime
+
+    index_path = os.path.join(kb_path, "wiki", "_index.md")
+
+    articles = []
+    for fname in sorted(os.listdir(articles_dir)):
+        if not fname.endswith(".md"):
+            continue
+        path = os.path.join(articles_dir, fname)
+        text = read_text(path)
+        # Extract title from YAML frontmatter
+        m = re.search(r'^title:\s*"?(.+?)"?\s*$', text, re.MULTILINE)
+        title = m.group(1).strip() if m else fname[:-3]
+        articles.append((fname[:-3], title))
+
+    lines = [
+        f"# {kb_name} — Article Index",
+        f"",
+        f"*Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M')}*",
+        f"",
+        f"**{len(articles)} articles** compiled.",
+        f"",
+        f"Run `compile-llm --index` for a thematic index with concept maps.",
+        f"",
+    ]
+
+    current_letter = ""
+    for slug, title in articles:
+        first = title[0].upper() if title else "#"
+        if first != current_letter:
+            current_letter = first
+            lines.append(f"## {current_letter}")
+            lines.append("")
+        lines.append(f"- [[{slug}|{title}]]")
+
+    write_text(index_path, "\n".join(lines))
 
 
 def _compile_index(backend, model: str, articles_dir: str) -> str:
@@ -1224,7 +1159,7 @@ def _cmd_compile_llm_inner(args, kb_path: str):
     run_index    = args.index    or not explicit
     run_concepts = args.concepts or not explicit
 
-    backend, model, llm_config = _llm_client(args.model)
+    backend, model, llm_config = _llm_client(args.model, getattr(args, 'backend', None))
 
     # Auxiliary model for simpler tasks (index, concepts)
     _MODEL_AUX = llm_config["aux_model"]
@@ -1283,6 +1218,12 @@ def _cmd_compile_llm_inner(args, kb_path: str):
             if n_failed_prev and not retry_failed and not args.full:
                 print(f"   Previously failed (skipped): {n_failed_prev}"
                       f"  — run --retry-failed to retry")
+
+            # Apply --limit if set
+            doc_limit = getattr(args, 'limit', 0) or 0
+            if doc_limit > 0 and len(pending) > doc_limit:
+                print(f"   Batch limit      : {doc_limit} (of {len(pending)} pending)")
+                pending = pending[:doc_limit]
 
             if pending:
                 est = _estimate_cost(pending, model)
@@ -1377,10 +1318,11 @@ def _cmd_compile_llm_inner(args, kb_path: str):
                           + (f", {failed_count} failed"
                              f" (run --retry-failed to retry)" if failed_count else ""))
 
-    # ── Auto-enable index if docs were compiled and --no-index was not set ──
+    # ── After docs: append to non-LLM listing (fast, no token cost) ──
+    # Full LLM index is expensive (sends all article summaries) — only on --index
     if run_docs and not run_index and not getattr(args, 'no_index', False):
-        run_index = True
-        print(f"\n   (auto-running --index to keep _index.md current; pass --no-index to skip)")
+        _append_to_index(kb_path, articles_dir, config.get('name', 'KB'))
+        print(f"\n   (updated _index.md; pass --index for full LLM rebuild)")
 
     # ── Step 2: regenerate index ───────────────────────────────────────────
     if run_index:
@@ -2182,6 +2124,10 @@ Environment:
     compile_llm_parser.add_argument(
         '--retry-failed', action='store_true',
         help='Retry documents that failed in a previous run'
+    )
+    compile_llm_parser.add_argument(
+        '--limit', type=int, default=0, metavar='N',
+        help='Max number of documents to compile (0 = unlimited, default: 0)'
     )
 
     # ------------------------------------------------------------------
