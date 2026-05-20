@@ -119,6 +119,11 @@ class IndexManager:
             if error:
                 self.index["files"][file_id]["error"] = error
 
+    def update_metadata(self, file_id: str, metadata: Dict[str, Any]):
+        """Merge arbitrary metadata into a file's index entry."""
+        if file_id in self.index["files"]:
+            self.index["files"][file_id].update(metadata)
+
     def get_file(self, file_id: str) -> Optional[Dict]:
         """Get file info by ID"""
         return self.index["files"].get(file_id)

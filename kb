@@ -10,4 +10,4 @@
 #   export PATH="$PATH:/path/to/knowledge-base-suite-en"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-exec python3 "$SCRIPT_DIR/builder/src/cli.py" "$@"
+exec /Users/billyjack/.hermes/hermes-agent/venv/bin/python3 "$SCRIPT_DIR/builder/src/cli.py" "$@"

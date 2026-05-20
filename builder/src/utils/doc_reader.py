@@ -34,9 +34,6 @@ def extract_document(file_path: str, output_dir: Optional[str] = None) -> Tuple[
     # Extract document
     text = _extract(file_path)
     
-    # Generate index
-    index = _generate_index(text)
-    
     # Determine output path
     base_name = Path(file_path).stem
     if output_dir is None:
@@ -45,42 +42,29 @@ def extract_document(file_path: str, output_dir: Optional[str] = None) -> Tuple[
     
     output_path = os.path.join(output_dir, f"{base_name}_extracted.txt")
     
-    # Build output content
+    # Build output content (no heuristic index — LLM compilation handles extraction)
     content = f"""# Document Analysis
 ## Basic Information
 - Filename: {os.path.basename(file_path)}
 - File Type: {Path(file_path).suffix.upper()}
 - Total Words: {len(text.split())}
 
-## Content Index
-### Core Claims (Top 20)
-"""
-    for item in index['core_claims']:
-        content += f"- {item}\n"
-    
-    content += "\n### Key Data (Top 20)\n"
-    for item in index['data_points']:
-        content += f"- {item}\n"
-    
-    content += "\n### Notable Quotes (Top 20)\n"
-    for item in index['quotes']:
-        content += f"- {item}\n"
-    
-    content += f"\n## Structured Text\n{text}"
-    
+## Structured Text
+{text}"""
+
     # Save file
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write(content)
-    
+
     # Build metadata
     metadata = {
         "original_path": file_path,
         "file_name": os.path.basename(file_path),
         "file_type": Path(file_path).suffix.upper(),
         "word_count": len(text.split()),
-        "core_claims": index['core_claims'],
-        "key_data": index['data_points'],
-        "quotes": index['quotes'],
+        "core_claims": [],   # deprecated — LLM compile handles extraction
+        "key_data": [],
+        "quotes": [],
         "structured_text": text
     }
     
@@ -108,30 +92,58 @@ def _extract_pdf(doc_path: str) -> str:
         import fitz  # PyMuPDF
     except ImportError:
         raise ImportError("Please install PyMuPDF: pip install PyMuPDF")
-    
-    # Detect if scanned
+
+    # ── Encrypted / corrupt PDF detection ──
+    try:
+        with fitz.open(doc_path) as test_doc:
+            pass
+    except Exception as e:
+        msg = str(e).lower()
+        if "password" in msg or "encrypt" in msg:
+            raise ValueError(
+                f"PDF is encrypted or password-protected: {doc_path}\n"
+                f"Remove protection first:  qpdf --decrypt \"{doc_path}\" unprotected.pdf"
+            )
+        if "not a pdf" in msg or "corrupt" in msg:
+            raise ValueError(f"File is not a valid PDF or is corrupted: {doc_path}")
+        raise ValueError(f"Cannot open PDF: {doc_path} — {e}")
+
+    # Detect if scanned — samples beginning, middle, and end pages
     if _is_scanned_pdf(doc_path):
         return _extract_pdf_scanned(doc_path)
     else:
         return _extract_pdf_normal(doc_path)
 
 
-def _is_scanned_pdf(doc_path: str, sample_pages: int = 3) -> bool:
-    """Detect if PDF is scanned"""
+def _is_scanned_pdf(doc_path: str, sample_pages: int = 5) -> bool:
+    """Detect if PDF is scanned — samples across beginning, middle, and end.
+
+    Only checking the first few pages misses PDFs where the front matter
+    (title, TOC) is machine-readable but the body is scanned images.
+    """
     import fitz
 
     with fitz.open(doc_path) as doc:
         total_pages = len(doc)
-        check_pages = min(sample_pages, total_pages)
+
+        # Choose sample indices spread across the entire document
+        if total_pages <= sample_pages:
+            indices = list(range(total_pages))
+        else:
+            step = max(1, (total_pages - 1) // (sample_pages - 1))
+            indices = [i * step for i in range(sample_pages)]
+            # Always include the last page
+            if indices[-1] != total_pages - 1:
+                indices[-1] = total_pages - 1
 
         scanned_count = 0
-        for i in range(check_pages):
+        for i in indices:
             page = doc[i]
             text = page.get_text().strip()
             if len(text) < 100:
                 scanned_count += 1
 
-    return scanned_count >= (check_pages // 2 + 1)
+    return scanned_count >= (len(indices) // 2 + 1)
 
 
 def _extract_pdf_normal(doc_path: str) -> str:
@@ -205,22 +217,31 @@ def _extract_pdf_scanned(doc_path: str, lang: str = None) -> str:
                 print(f"  Detected Chinese text, using chi_sim+eng for OCR")
 
         pages_text = []
+        failed_pages = 0
 
         print(f"Detected scanned PDF, {len(doc)} pages, starting OCR...")
 
         for page_num, page in enumerate(doc, 1):
             print(f"  OCR page {page_num}/{len(doc)}...")
-            mat = fitz.Matrix(2.0, 2.0)
-            pix = page.get_pixmap(matrix=mat)
-            # Convert to RGB if the pixmap uses a non-RGB colorspace
-            if pix.n >= 5:  # CMYK or other non-RGB/Gray
-                pix = fitz.Pixmap(fitz.csRGB, pix)
-            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+            try:
+                mat = fitz.Matrix(2.0, 2.0)
+                pix = page.get_pixmap(matrix=mat)
+                # Convert to RGB if the pixmap uses a non-RGB colorspace
+                if pix.n >= 5:  # CMYK or other non-RGB/Gray
+                    pix = fitz.Pixmap(fitz.csRGB, pix)
+                img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
 
-            text = pytesseract.image_to_string(img, lang=lang)
-            text = _clean_ocr_text(text)
+                text = pytesseract.image_to_string(img, lang=lang)
+                text = _clean_ocr_text(text)
 
-            pages_text.append(f"\n--- Page {page_num} ---\n{text}\n")
+                pages_text.append(f"\n--- Page {page_num} ---\n{text}\n")
+            except Exception as e:
+                failed_pages += 1
+                pages_text.append(f"\n--- Page {page_num} ---\n[OCR failed: {e}]\n")
+                print(f"    ⚠️ OCR page {page_num} failed: {e}")
+
+        if failed_pages:
+            print(f"  ⚠️ {failed_pages}/{len(doc)} pages failed OCR")
 
     return "\n".join(pages_text)
 
@@ -326,43 +347,6 @@ def _clean_text(text: str) -> str:
         filtered.append(line)
     
     return '\n'.join(filtered)
-
-
-def _generate_index(text: str) -> Dict[str, list]:
-    """Generate content index"""
-    lines = text.split('\n')
-    index = {
-        'core_claims': [],
-        'data_points': [],
-        'quotes': []
-    }
-    
-    for line in lines:
-        line = line.strip()
-        if len(line) < 10 or len(line) > 300:
-            continue
-
-        # Core claims — word-bounded to avoid substring matches
-        if re.search(r'\b(?:is|are|means|reflects|indicates|proves|determines|leads\s+to|essence|key)\b', line, re.IGNORECASE):
-            if line not in index['core_claims']:
-                index['core_claims'].append(line)
-
-        # Key data — anchor year-like patterns with surrounding context
-        if re.search(r'\d+\.?\d*\s*%|\$\d+|\b\d{4}\b|\d+\s+billion|\d+\s+million|\d+\.\d+', line):
-            if line not in index['data_points']:
-                index['data_points'].append(line)
-
-        # Quotes — require actual quoted text (paired double quotes), not apostrophes
-        if re.search(r'"[^"]{5,}"', line):
-            if line not in index['quotes']:
-                index['quotes'].append(line)
-
-    # Truncate once after processing all lines
-    for key in index:
-        if len(index[key]) > 20:
-            index[key] = index[key][:20]
-
-    return index
 
 
 def is_supported_format(file_path: str) -> bool:

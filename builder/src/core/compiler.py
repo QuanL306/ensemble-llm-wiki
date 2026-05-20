@@ -13,6 +13,7 @@ from datetime import datetime
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.file_utils import write_text, read_text, ensure_dir, sanitize_filename
+from utils.doc_reader import extract_document
 from core.indexer import IndexManager, ConceptIndex
 
 
@@ -477,15 +478,14 @@ class WikiCompiler:
         model: Optional[str] = None,
         fallback: bool = True,
     ) -> Dict[str, Any]:
-        """
-        Full LLM-powered compilation workflow.
+        """DEPRECATED: Use `cmd_compile_llm` in cli.py instead.
 
-        Args:
-            backend: LLM backend name. Auto-detected if None.
-            model: Override default model.
-            fallback: If True and LLM fails, fall back to rule-based extraction.
+        This legacy path only extracts concepts + summaries (8K char cap).
+        The new path (cli.py) generates full wiki articles with retrieval
+        queries, chapter-by-chapter compilation, and proper truncation.
 
-        Returns:
+        Kept for backward compatibility with code that imports WikiCompiler
+        directly, but not used in the cron pipeline.
             dict with results including concepts, summaries, tokens used.
         """
         from core.llm import compile_concepts, merge_concepts, list_available
@@ -515,13 +515,56 @@ class WikiCompiler:
 
         print(f"[compiler] LLM compilation via {backend} ({model or 'default model'})")
 
+        # Gather all files that need processing: completed + raw files not yet compiled
         completed_files = self.indexer.get_completed_files()
+        raw_dir = os.path.join(self.kb_path, "raw", "books")
+        processed_paths = {f["path"] for f in completed_files if f.get("path")}
+
+        # Find raw files not in the index or without wiki_path
+        all_files = list(completed_files)
+        if os.path.isdir(raw_dir):
+            for fname in sorted(os.listdir(raw_dir)):
+                if not fname.lower().endswith(('.pdf', '.epub')):
+                    continue
+                fpath = os.path.join(raw_dir, fname)
+                if fpath in processed_paths:
+                    continue
+                # File not in index — extract text via doc_reader and register
+                file_id = self.indexer._generate_file_id(fpath)
+                if file_id in self.indexer.index["files"]:
+                    fi = self.indexer.index["files"][file_id]
+                else:
+                    fi = {"path": fpath, "name": fname, "original_name": fname,
+                          "stem": os.path.splitext(fname)[0],
+                          "file_id": file_id, "status": "pending"}
+                    self.indexer.index["files"][file_id] = fi
+
+                # Extract text directly if no wiki_path
+                if not fi.get("wiki_path"):
+                    try:
+                        extracted, _ = extract_document(fpath, output_dir=self.articles_dir)
+                        wiki_rel = os.path.relpath(
+                            os.path.join(self.articles_dir, f"{os.path.splitext(fname)[0]}_extracted.txt"),
+                            self.kb_path)
+                        # extract_document writes the file; verify it exists
+                        full_wiki = os.path.join(self.kb_path, wiki_rel)
+                        if os.path.exists(full_wiki):
+                            fi["wiki_path"] = wiki_rel
+                            fi["status"] = "completed"
+                            self.indexer.save_index()
+                            print(f"[compiler]   extracted: {fname[:50]}")
+                    except Exception as e:
+                        print(f"[compiler]   ⚠️ extract failed for {fname[:40]}: {e}")
+                        continue
+
+                all_files.append(fi)
+
         all_doc_concepts: List[Dict[str, Any]] = []
 
         # ── Step 1: per-document concept extraction ──
-        for file_info in completed_files:
+        for file_info in all_files:
             try:
-                file_id = self.indexer.generate_file_id(file_info["path"])
+                file_id = file_info.get("file_id") or self.indexer.generate_file_id(file_info["path"])
 
                 # Extract full text
                 wiki_path = file_info.get("wiki_path", "")
@@ -551,8 +594,8 @@ class WikiCompiler:
                 for concept in concepts:
                     self.concept_index.add_concept(
                         concept,
-                        file_path=file_info["path"],
                         definition="",
+                        source_file=file_info["path"],
                     )
 
                 # Update file metadata with LLM enrichment

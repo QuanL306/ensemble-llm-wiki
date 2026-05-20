@@ -1120,6 +1120,17 @@ def cmd_compile_llm(args):
         print("❌  Knowledge base not found (.kbaconfig). Run 'init' first.")
         return
 
+    # ── Graphify check ──────────────────────────────────────────────────
+    graph_edges = os.path.join(kb_path, "wiki", "graphify-out", "edges.jsonl")
+    if not os.path.exists(graph_edges):
+        if not getattr(args, 'skip_graphify_check', False):
+            print("")
+            print("⚠️  Knowledge graph not found (wiki/graphify-out/edges.jsonl).")
+            print("   The compile step injects graph context for better articles.")
+            print("   Run 'graphify' first, then re-run compile.")
+            print("   Or skip this check with: --skip-graphify-check")
+            sys.exit(1)
+
     # ── Lock file to prevent concurrent compile ────────────────────────
     lock_file = os.path.join(kb_path, "wiki", "_meta", ".compile.lock")
     if os.path.exists(lock_file):
@@ -2128,6 +2139,10 @@ Environment:
     compile_llm_parser.add_argument(
         '--limit', type=int, default=0, metavar='N',
         help='Max number of documents to compile (0 = unlimited, default: 0)'
+    )
+    compile_llm_parser.add_argument(
+        '--skip-graphify-check', action='store_true',
+        help='Skip the knowledge graph existence check (not recommended)'
     )
 
     # ------------------------------------------------------------------

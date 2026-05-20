@@ -73,11 +73,9 @@ def find_changed_files(raw_dir: Path, manifest_file: Path) -> List[Path]:
 
 def run_ingest(kb_path: Path, python: str = "python3") -> bool:
     """Run the builder's ingest command."""
-    builder_cli = kb_path.parent / "builder" / "src" / "cli.py"
-    if not builder_cli.exists():
-        # Try relative to this script
-        script_dir = Path(__file__).parent
-        builder_cli = script_dir.parent / "src" / "cli.py"
+    # cli.py is at builder/src/cli.py (session_start.py is at builder/src/core/session_start.py)
+    script_dir = Path(__file__).resolve().parent  # .../builder/src/core/
+    builder_cli = script_dir.parent / "cli.py"     # .../builder/src/cli.py
 
     if not builder_cli.exists():
         print("[session_start] Builder CLI not found, skipping ingest", file=sys.stderr)
@@ -87,7 +85,7 @@ def run_ingest(kb_path: Path, python: str = "python3") -> bool:
         result = subprocess.run(
             [python, str(builder_cli), "ingest"],
             cwd=str(kb_path),
-            capture_output=True, text=True, timeout=300,
+            capture_output=True, text=True, timeout=900,
         )
         return result.returncode == 0
     except Exception as e:
@@ -97,6 +95,11 @@ def run_ingest(kb_path: Path, python: str = "python3") -> bool:
 
 def run_compile(kb_path: Path, python: str = "python3") -> bool:
     """Run LLM-powered compilation if any backend API key is available."""
+    # Ensure core modules are importable (same pattern as run_confidence_scoring)
+    core_root = Path(__file__).resolve().parent.parent  # builder/src/
+    if str(core_root) not in sys.path:
+        sys.path.insert(0, str(core_root))
+
     from core.llm import list_available, detect_backend
 
     if not list_available():

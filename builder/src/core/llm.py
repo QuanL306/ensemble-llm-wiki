@@ -49,13 +49,15 @@ BACKENDS: Dict[str, Dict[str, Any]] = {
     "kimi": {
         "base_url": "https://api.moonshot.cn/v1/chat/completions",
         "api_key_env": "MOONSHOT_API_KEY",
-        "model": "moonshot-v1-8k",
+        "model": "kimi-k2.6",
         "provider": "openai-compat",
+        "fixed_temperature": 0.6,
+        "extra_body": {"thinking": {"type": "disabled"}},
     },
     "zhipu": {
         "base_url": "https://open.bigmodel.cn/api/paas/v4/chat/completions",
         "api_key_env": "ZHIPU_API_KEY",
-        "model": "glm-4-flash",
+        "model": "glm-5.1",
         "provider": "openai-compat",
     },
     "minimax": {
@@ -73,7 +75,7 @@ BACKENDS: Dict[str, Dict[str, Any]] = {
 }
 
 # Priority order for auto-detection
-_AUTO_PRIORITY = ["deepseek", "openai", "kimi", "claude", "gemini", "zhipu", "minimax"]
+_AUTO_PRIORITY = ["kimi", "deepseek", "openai", "claude", "gemini", "zhipu", "minimax"]
 
 
 # ── Exception hierarchy ──────────────────────────────────────────
@@ -178,28 +180,31 @@ def chat(
         raise RuntimeError(f"{cfg['api_key_env']} is not set for backend '{backend}'")
 
     actual_model = model or cfg["model"]
+    actual_temperature = cfg.get("fixed_temperature", temperature)
+    extra_body = cfg.get("extra_body", {})
     provider = cfg["provider"]
 
     try:
         if provider == "openai-compat":
             result = _call_openai_compat(
                 base_url, api_key, actual_model,
-                prompt, system, temperature, max_tokens, backend,
+                prompt, system, actual_temperature, max_tokens, backend,
+                extra_body,
             )
         elif provider == "anthropic":
             result = _call_anthropic(
                 base_url, api_key, actual_model,
-                prompt, system, temperature, max_tokens,
+                prompt, system, actual_temperature, max_tokens,
             )
         elif provider == "gemini":
             result = _call_gemini(
                 base_url, api_key, actual_model,
-                prompt, system, temperature, max_tokens,
+                prompt, system, actual_temperature, max_tokens,
             )
         elif provider == "minimax":
             result = _call_minimax(
                 base_url, api_key, actual_model,
-                prompt, system, temperature, max_tokens,
+                prompt, system, actual_temperature, max_tokens,
             )
         else:
             raise LLMPermanentError(f"Unknown provider: {provider}")
@@ -272,6 +277,7 @@ def _call_openai_compat(
     temperature: float,
     max_tokens: int,
     backend: str,
+    extra_body: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """OpenAI-compatible /v1/chat/completions (openai, deepseek, kimi, zhipu)."""
     messages: List[Dict[str, str]] = []
@@ -279,12 +285,15 @@ def _call_openai_compat(
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
 
-    body = json.dumps({
+    body_dict: Dict[str, Any] = {
         "model": model,
         "messages": messages,
         "temperature": temperature,
         "max_tokens": max_tokens,
-    }).encode("utf-8")
+    }
+    if extra_body:
+        body_dict.update(extra_body)
+    body = json.dumps(body_dict).encode("utf-8")
 
     req = urllib.request.Request(
         base_url,
@@ -296,7 +305,7 @@ def _call_openai_compat(
     )
 
     def _do_request():
-        with urllib.request.urlopen(req, timeout=120) as resp:
+        with urllib.request.urlopen(req, timeout=300) as resp:
             return json.loads(resp.read())
 
     data = _retry_with_backoff(_do_request)
@@ -343,7 +352,7 @@ def _call_anthropic(
     )
 
     def _do_request():
-        with urllib.request.urlopen(req, timeout=120) as resp:
+        with urllib.request.urlopen(req, timeout=300) as resp:
             return json.loads(resp.read())
 
     data = _retry_with_backoff(_do_request)
@@ -398,7 +407,7 @@ def _call_gemini(
     )
 
     def _do_request():
-        with urllib.request.urlopen(req, timeout=120) as resp:
+        with urllib.request.urlopen(req, timeout=300) as resp:
             return json.loads(resp.read())
 
     data = _retry_with_backoff(_do_request)
@@ -448,7 +457,7 @@ def _call_minimax(
     )
 
     def _do_request():
-        with urllib.request.urlopen(req, timeout=120) as resp:
+        with urllib.request.urlopen(req, timeout=300) as resp:
             return json.loads(resp.read())
 
     data = _retry_with_backoff(_do_request)
