@@ -43,7 +43,7 @@ BACKENDS: Dict[str, Dict[str, Any]] = {
     "deepseek": {
         "base_url": "https://api.deepseek.com/v1/chat/completions",
         "api_key_env": "DEEPSEEK_API_KEY",
-        "model": "deepseek-chat",
+        "model": "deepseek-v4-flash",
         "provider": "openai-compat",
     },
     "kimi": {

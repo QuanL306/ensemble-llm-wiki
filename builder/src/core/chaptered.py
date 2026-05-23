@@ -178,7 +178,7 @@ def _compile_document_chaptered(backend, model: str, file_info: dict,
             # HTTP 400 on Chinese model = content filter → retry with DeepSeek
             if "400" in err and backend in ("zhipu", "kimi"):
                 try:
-                    result2 = chat(prompt, backend="deepseek", model="deepseek-chat",
+                    result2 = chat(prompt, backend="deepseek", model="deepseek-v4-flash",
                                    temperature=0.2, max_tokens=400)
                     content2 = result2["content"].strip()
                     if content2.startswith("```"):
