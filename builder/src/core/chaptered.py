@@ -77,7 +77,14 @@ def _compile_document_chaptered(backend, model: str, file_info: dict,
     single-pass _compile_document).
     """
     # Deferred import — _stream_message lives in cli.py
-    from .. import cli as _cli
+    # Use sys.path insert to avoid "attempted relative import beyond top-level package"
+    # when chaptered.py is called from compiler.py in nested import chains.
+    import sys as _sys
+    from pathlib import Path as _Path
+    _src_dir = str(_Path(__file__).resolve().parent.parent)
+    if _src_dir not in _sys.path:
+        _sys.path.insert(0, _src_dir)
+    import cli as _cli
 
     name = file_info.get("name", "Unknown")
     name_clean = re.sub(r'\.[^.]+$', '', name)

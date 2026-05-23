@@ -81,18 +81,22 @@ kb init ~/my-research --name "My Research"
 # All subsequent commands run from inside the KB directory
 cd ~/my-research
 
-# Drop PDFs, EPUBs, Markdown files into raw/
-cp ~/Downloads/*.pdf raw/
+# ONE COMMAND: add files with automatic pipeline
+kb add ~/Downloads/book.pdf                  # PDF → graphify-first
+kb add ~/Downloads/article.md                # MD → compile-first
+kb add ~/Downloads/*.pdf --yes              # batch mode, no prompt
 
-# Ingest: extract and index all documents
-kb ingest
+# The 'add' command automatically:
+#   1. Copies file into raw/
+#   2. Detects optimal pipeline (graphify-first for PDF, compile-first for MD)
+#   3. Runs ingest → compile-llm → graphify in the correct order
 
-# Compile Option A — LLM-driven (recommended, requires any LLM API key)
-export DEEPSEEK_API_KEY=sk-...      # or OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.
-kb compile-llm                      # writes real wiki articles via LLM
-
-# Compile Option B — regex-based (no API key, fast structural scaffold)
-kb compile
+# Manual control (if you prefer step-by-step):
+#   Copy files to raw/ yourself
+cp ~/Downloads/*.pdf raw/books/
+kb ingest                          # extract and index
+kb compile-llm --docs              # LLM writes wiki articles
+kb graphify                        # build knowledge graph
 
 # Open ~/my-research in Obsidian to explore
 ```
@@ -191,12 +195,14 @@ curl -X POST http://myserver.com:8000/mcp/v1/tools/call \
 ```bash
 cd ~/my-kb
 
-# Add new papers → raw/
-# Incrementally ingest only new files
-kb ingest
+# ONE COMMAND to add new content
+kb add new-paper.pdf new-essay.md --yes
 
-# LLM-compile new documents (skips already-compiled ones)
-kb compile-llm --docs
+# Or step-by-step for fine control
+cp new-paper.pdf raw/books/
+kb ingest                         # incremental — only processes new files
+kb compile-llm --docs             # skips already-compiled documents
+kb graphify                       # update knowledge graph
 
 # Check health
 kb lint
@@ -260,9 +266,11 @@ kb fetch https://www.youtube.com/watch?v=...
 | Command | Purpose |
 |---------|---------|
 | `init <path>` | Initialize a new knowledge base |
+| `add <files...>` | Add files with automatic pipeline (ingest→compile→graphify) |
 | `ingest` | Extract and index documents from `raw/` |
 | `compile` | Regex-based wiki compilation (no API key) |
 | `compile-llm` | LLM-driven wiki compilation (requires any LLM API key) |
+| `graphify` | Build knowledge graph from compiled wiki articles |
 | `fetch <source>` | Fetch from web/GitHub/video via Skill Seekers |
 | `fetch-list` | List previously fetched skills |
 | `search <query>` | Keyword search against local index |
@@ -275,7 +283,8 @@ kb fetch https://www.youtube.com/watch?v=...
 
 ```
 my-research/
-├── .kbaconfig            # KB configuration
+├── .kbaconfig            # KB configuration (name, version, pipeline rules)
+├── .kbregistry.json       # Content registry — tracks every document through pipeline
 ├── raw/                  # Source documents (subfolders are organizational only)
 │   ├── articles/         # Blog posts, essays, web articles
 │   ├── books/            # EPUBs, full-length book PDFs
@@ -292,7 +301,8 @@ my-research/
     ├── _index.md         # Start here in Obsidian
     ├── _articles/        # One wiki article per document
     ├── _concepts/        # Auto-extracted concept pages
-    └── _meta/            # Index files (JSON)
+    ├── _meta/            # Index files (JSON)
+    └── graphify-out/     # Knowledge graph (graph.json, edges.jsonl, graph.html)
 ```
 
 ## Troubleshooting

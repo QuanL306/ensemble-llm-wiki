@@ -10,6 +10,7 @@ import sys
 import json
 import argparse
 from datetime import datetime
+from pathlib import Path
 from typing import Optional, Tuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -22,6 +23,7 @@ from core.skill_seekers import SkillSeekersIntegration, SkillSeekersNotInstalled
 from core.prompts import _PROMPT_DOCUMENT, _PROMPT_INDEX, _PROMPT_CONCEPTS
 from core.chaptered import (_CHAPTER_SPLIT_PATTERNS, _split_into_chapters,
                              _compile_document_chaptered)
+from core.registry import detect_pipeline, detect_file_type
 
 
 def load_config(kb_path: str) -> dict:
@@ -112,6 +114,14 @@ def cmd_init(args):
         "ingest": {
             "supported_formats": [".pdf", ".epub", ".txt", ".md", ".markdown"],
             "ignore_patterns": ["node_modules/", ".git/", "__pycache__/", ".obsidian/"]
+        },
+        "pipeline": {
+            "default": "graphify-first",
+            "graphify_twice": False,
+            "rules": [
+                {"match": "*.md", "pipeline": "compile-first"},
+                {"match": "*.markdown", "pipeline": "compile-first"}
+            ]
         }
     }
     
@@ -422,6 +432,143 @@ def cmd_harvest(args):
     if result['new'] > 0:
         print(f"\n💡 Next step: python src/cli.py ingest")
         print(f"   Transcripts written to: raw/transcripts/")
+
+
+# ============================================================
+# add — one-command content ingestion with auto-pipeline
+# ============================================================
+
+def cmd_add(args):
+    """Add one or more files to the KB and run the appropriate pipeline.
+
+    Pipeline options (auto-detected by default):
+      graphify-first  — PDF/EPUB: graphify → ingest → compile-llm
+      compile-first   — MD/TXT:  ingest → compile-llm → graphify
+      none            — ingest only, skip graphify and compile
+    """
+    from core.kbapi import KnowledgeBase
+
+    kb_path = get_kb_path()
+    if not kb_path:
+        print("❌ Error: Knowledge base config not found (.kbaconfig)")
+        print("   Please run: kb init <folder_path>")
+        return
+
+    kb = KnowledgeBase(kb_path)
+    config = load_config(kb_path)
+    print(f"📚 {config.get('name', kb_path)}")
+
+    sources = args.sources
+    if not sources:
+        print("❌ Error: No source files specified.")
+        print("   Usage: kb add file1.pdf file2.md ...")
+        return
+
+    # Pre-flight check: filter out directories and non-existent files
+    valid = []
+    for s in sources:
+        p = Path(s)
+        if not p.exists():
+            print(f"⚠️  Skipping (not found): {s}")
+            continue
+        if p.is_dir():
+            print(f"⚠️  Skipping (is a directory): {s}")
+            continue
+        valid.append(s)
+
+    if not valid:
+        print("❌ No valid source files to add.")
+        return
+    sources = valid
+
+    # Resolve explicit pipeline
+    pipeline = args.pipeline or None
+
+    # Show plan
+    lines = []
+    for s in sources[:10]:
+        detected = pipeline or detect_pipeline(s, config)
+        lines.append(f"   {os.path.basename(s):<40} → {detected}")
+    if len(sources) > 10:
+        lines.append(f"   ... and {len(sources) - 10} more")
+    print("\n📋 Plan:")
+    for l in lines:
+        print(l)
+
+    if not args.yes:
+        if input("\n   Proceed? [y/N] ").strip().lower() != "y":
+            print("   Cancelled.")
+            return
+
+    if len(sources) == 1:
+        # Single file — full inline pipeline
+        result = kb.add(
+            source=sources[0],
+            pipeline=pipeline,
+            run_ingest=not args.no_ingest,
+            run_compile=not args.no_compile,
+            run_graphify=not args.no_graphify,
+            model=args.model,
+        )
+        if result["status"] == "ok":
+            print(f"\n✅ Added: {result['rel_path']}")
+            print(f"   Pipeline: {result['pipeline']}")
+            stages = result.get("stages", {})
+            if stages:
+                for stage, s in stages.items():
+                    icon = "✅" if s == "done" else "❌"
+                    print(f"   {icon} {stage}")
+        else:
+            print(f"\n❌ {result.get('error', 'Unknown error')}")
+    else:
+        # Batch — copy all, then run stages once
+        result = kb.add_batch(
+            sources=sources,
+            pipeline=pipeline,
+            run_ingest=not args.no_ingest,
+            run_compile=not args.no_compile,
+            run_graphify=not args.no_graphify,
+            model=args.model,
+        )
+        print(f"\n✅ Batch complete: {len(sources)} files")
+        stages = result.get("stages", {})
+        if stages:
+            for stage, s in stages.items():
+                icon = "✅" if s == "done" else "❌"
+                print(f"   {icon} {stage}")
+
+    # Show registry stats
+    stats = kb.status()
+    reg = stats.get("registry", {})
+    print(f"\n📈 KB Status:")
+    print(f"   Total:    {reg.get('total', 0)}")
+    print(f"   Ingested: {reg.get('ingested', 0)}")
+    print(f"   Compiled: {reg.get('compiled', 0)}")
+    print(f"   Graphed:  {reg.get('graphed', 0)}")
+
+
+def cmd_graphify(args):
+    """Run graphify on the KB's wiki/ directory to build a knowledge graph."""
+    kb_path = get_kb_path()
+    if not kb_path:
+        print("❌ Error: Knowledge base config not found (.kbaconfig)")
+        return
+
+    from core.graphify_integration import run_graphify
+
+    wiki_dir = os.path.join(kb_path, "wiki")
+    if not os.path.isdir(wiki_dir):
+        print("❌ wiki/ not found. Run ingest + compile first.")
+        return
+
+    print(f"🔍 Building knowledge graph from: {wiki_dir}")
+    ok = run_graphify(Path(wiki_dir), "standard")
+    if ok:
+        print("✅ Graphify complete.")
+        graph_out = os.path.join(wiki_dir, "graphify-out")
+        print(f"   Output: {graph_out}/")
+    else:
+        print("❌ Graphify failed. Check that graphify is installed: pip install graphifyy")
 
 
 # ============================================================
@@ -1120,13 +1267,28 @@ def cmd_compile_llm(args):
         print("❌  Knowledge base not found (.kbaconfig). Run 'init' first.")
         return
 
-    # ── Graphify check ──────────────────────────────────────────────────
-    graph_edges = os.path.join(kb_path, "wiki", "graphify-out", "edges.jsonl")
-    if not os.path.exists(graph_edges):
-        if not getattr(args, 'skip_graphify_check', False):
+    # ── Graphify check (pipeline-aware) ──────────────────────────────────
+    # Only block if graphify-first pipeline AND graph hasn't run yet.
+    # compile-first pipeline: graphify comes after compile, so skip this guard.
+    if not getattr(args, 'skip_graphify_check', False):
+        config = load_config(kb_path)
+        pipeline_default = config.get("pipeline", {}).get("default", "graphify-first")
+
+        # Check if any completed files are graphify-first type
+        from core.registry import detect_pipeline
+        indexer = IndexManager(kb_path)
+        completed = indexer.get_completed_files()
+        needs_graphify = False
+        for f in completed:
+            if detect_pipeline(f.get("path", ""), config) == "graphify-first":
+                needs_graphify = True
+                break
+
+        graph_edges = os.path.join(kb_path, "wiki", "graphify-out", "edges.jsonl")
+        if needs_graphify and not os.path.exists(graph_edges):
             print("")
             print("⚠️  Knowledge graph not found (wiki/graphify-out/edges.jsonl).")
-            print("   The compile step injects graph context for better articles.")
+            print("   Some documents use the graphify-first pipeline.")
             print("   Run 'graphify' first, then re-run compile.")
             print("   Or skip this check with: --skip-graphify-check")
             sys.exit(1)
@@ -1970,11 +2132,12 @@ def main():
     parser = argparse.ArgumentParser(
         description="Knowledge Base Builder Agent",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
+        epilog="""Examples:
   python src/cli.py init ~/my-kb --name "My KB"
+  python src/cli.py add book.pdf article.md
   python src/cli.py ingest
-  python src/cli.py compile
+  python src/cli.py compile-llm --docs
+  python src/cli.py graphify
   python src/cli.py status
         """
     )
@@ -2060,6 +2223,73 @@ Examples:
     harvest_parser.add_argument(
         '--list', action='store_true',
         help='List previously harvested sessions'
+    )
+
+    # ------------------------------------------------------------------
+    # add: one-command content addition with auto-pipeline
+    # ------------------------------------------------------------------
+    add_parser = subparsers.add_parser(
+        'add',
+        help='Add files to KB with automatic pipeline (ingest → compile → graphify)',
+        description=(
+            'Copy files into raw/, detect the optimal pipeline, and run '
+            'ingest → compile-llm → graphify in the correct order.\n\n'
+            'Pipelines (auto-detected, override with --pipeline):\n'
+            '  graphify-first  PDF/EPUB: ingest → graphify → compile-llm\n'
+            '  compile-first   MD/TXT:  ingest → compile-llm → graphify\n'
+            '  none            Ingest only, skip graphify and compile'
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""Examples:
+  kb add book.pdf                    # auto: graphify-first pipeline
+  kb add article.md                  # auto: compile-first pipeline
+  kb add book.pdf --pipeline compile-first   # force pipeline
+  kb add essay.md --no-graphify             # skip graphify
+  kb add --batch docs/*.pdf --yes          # batch mode, no prompt
+        """
+    )
+    add_parser.add_argument(
+        'sources', nargs='+',
+        help='Source files to add (absolute or relative paths)'
+    )
+    add_parser.add_argument(
+        '--pipeline', choices=['graphify-first', 'compile-first', 'none'],
+        help='Force a specific pipeline (default: auto-detect)'
+    )
+    add_parser.add_argument(
+        '--no-ingest', action='store_true',
+        help='Skip ingest step'
+    )
+    add_parser.add_argument(
+        '--no-compile', action='store_true',
+        help='Skip compile-llm step'
+    )
+    add_parser.add_argument(
+        '--no-graphify', action='store_true',
+        help='Skip graphify step'
+    )
+    add_parser.add_argument(
+        '--model',
+        help='LLM model override for compile step'
+    )
+    add_parser.add_argument(
+        '--yes', '-y', action='store_true',
+        help='Skip confirmation prompt'
+    )
+
+    # ------------------------------------------------------------------
+    # graphify: build knowledge graph from wiki articles
+    # ------------------------------------------------------------------
+    graphify_parser = subparsers.add_parser(
+        'graphify',
+        help='Build knowledge graph from compiled wiki articles',
+        description=(
+            'Run Graphify on wiki/ to build a knowledge graph with nodes, '
+            'edges, communities, and interactive HTML visualization.'
+        ),
+        epilog="""Examples:
+  kb graphify        # build graph from wiki/ articles
+        """
     )
 
     # ------------------------------------------------------------------
@@ -2253,9 +2483,11 @@ Examples:
 
     commands = {
         'init': cmd_init,
+        'add': cmd_add,
         'ingest': cmd_ingest,
         'compile': cmd_compile,
         'compile-llm': cmd_compile_llm,
+        'graphify': cmd_graphify,
         'status': cmd_status,
         'fetch': cmd_fetch,
         'fetch-list': cmd_fetch_list,

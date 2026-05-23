@@ -264,20 +264,43 @@ def process_single_kb(kb_path: Path, args) -> int:
     if len(changed) > 5:
         print(f"  ... and {len(changed) - 5} more")
 
-    # 2. Ingest
-    print("[session_start] Running ingest...")
-    if not run_ingest(kb_path):
-        print("[session_start] ⚠️ Ingest failed, continuing anyway")
+    # Detect pipeline from KB config + changed file types
+    pipeline = _detect_kb_pipeline(kb_path, changed)
+    print(f"[session_start] Pipeline: {pipeline}")
 
-    # 3. Graphify — build knowledge graph BEFORE compile-llm
-    #    so the graph structure can inform cross-document linking
-    print("[session_start] Building knowledge graph (Graphify)...")
-    run_graphify_on_kb(kb_path)
+    # 2. Run pipeline in correct order
+    import yaml
+    config = {}
+    config_file = kb_path / ".kbaconfig"
+    if config_file.exists():
+        try:
+            config = yaml.safe_load(config_file.read_text(encoding="utf-8")) or {}
+        except Exception:
+            pass
+    graphify_twice = config.get("pipeline", {}).get("graphify_twice", False)
 
-    # 4. Compile (if API key available)
-    if not args.no_compile:
-        print("[session_start] Running compile-llm...")
-        run_compile(kb_path)
+    if pipeline == "graphify-first":
+        print("[session_start] Running ingest...")
+        run_ingest(kb_path)
+        print("[session_start] Building knowledge graph (Graphify)...")
+        run_graphify_on_kb(kb_path)
+        if not args.no_compile:
+            print("[session_start] Running compile-llm...")
+            run_compile(kb_path)
+        if graphify_twice and not args.no_compile:
+            print("[session_start] Rebuilding knowledge graph (Graphify, pass 2)...")
+            run_graphify_on_kb(kb_path)
+    elif pipeline == "compile-first":
+        print("[session_start] Running ingest...")
+        run_ingest(kb_path)
+        if not args.no_compile:
+            print("[session_start] Running compile-llm...")
+            run_compile(kb_path)
+        print("[session_start] Building knowledge graph (Graphify)...")
+        run_graphify_on_kb(kb_path)
+    else:  # "none"
+        print("[session_start] Running ingest...")
+        run_ingest(kb_path)
 
     # 5. Confidence scoring
     print("[session_start] Running confidence scoring...")
@@ -289,6 +312,44 @@ def process_single_kb(kb_path: Path, args) -> int:
 
     print(f"[session_start] ✅ Done at {datetime.now().strftime('%H:%M:%S')}")
     return 0
+
+
+def _detect_kb_pipeline(kb_path: Path, changed_files: list) -> str:
+    """Determine the effective pipeline for this KB based on config and files.
+
+    Priority:
+      1. If all changed files match a single config rule → use that pipeline
+      2. If most files are pre-structured (MD) → compile-first
+      3. If most files are raw (PDF/EPUB) → graphify-first
+      4. Config default
+    """
+    import yaml
+    try:
+        from core.registry import detect_pipeline
+    except ImportError:
+        # Fallback if registry module not importable (e.g., wrong Python path)
+        return "graphify-first"
+
+    config = {}
+    config_file = kb_path / ".kbaconfig"
+    if config_file.exists():
+        try:
+            config = yaml.safe_load(config_file.read_text(encoding="utf-8")) or {}
+        except Exception:
+            pass
+
+    # If no changed files, use config default
+    if not changed_files:
+        default = config.get("pipeline", {}).get("default", "graphify-first")
+        return default if default in ("graphify-first", "compile-first", "none") else "graphify-first"
+
+    # Detect per file, pick majority
+    counts = {"graphify-first": 0, "compile-first": 0, "none": 0}
+    for f in changed_files:
+        p = detect_pipeline(str(f), config)
+        counts[p] = counts.get(p, 0) + 1
+
+    return max(counts, key=lambda k: counts[k])
 
 
 if __name__ == "__main__":
