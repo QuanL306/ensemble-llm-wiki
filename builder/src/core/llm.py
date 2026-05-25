@@ -74,8 +74,8 @@ BACKENDS: Dict[str, Dict[str, Any]] = {
     },
 }
 
-# Priority order for auto-detection
-_AUTO_PRIORITY = ["kimi", "deepseek", "openai", "claude", "gemini", "zhipu", "minimax"]
+# Priority order for auto-detection (global providers first, then China-specific)
+_AUTO_PRIORITY = ["deepseek", "openai", "claude", "gemini", "kimi", "zhipu", "minimax"]
 
 
 # ── Exception hierarchy ──────────────────────────────────────────

@@ -14,11 +14,15 @@ pip install -r requirements.txt
 # macOS system deps for PDF processing:
 brew install tesseract poppler
 
-# Set exactly one LLM API key — the system auto-detects whichever is present:
-export DEEPSEEK_API_KEY=sk-...       # cheapest, recommended default
-export OPENAI_API_KEY=sk-...
-export ANTHROPIC_API_KEY=sk-ant-...
-export GEMINI_API_KEY=AIza...
+# Set exactly one LLM API key — the system auto-detects whichever is present.
+# Auto-detection order: DeepSeek → OpenAI → Claude → Gemini → Kimi → Zhipu → MiniMax
+export DEEPSEEK_API_KEY=sk-...       # global, cheap, good default
+export OPENAI_API_KEY=sk-...         # global
+export ANTHROPIC_API_KEY=sk-ant-...  # global
+export GEMINI_API_KEY=AIza...        # global
+# export MOONSHOT_API_KEY=...        # Kimi — China
+# export ZHIPU_API_KEY=...           # Zhipu GLM — China
+# export MINIMAX_API_KEY=...         # MiniMax — China
 ```
 
 ---

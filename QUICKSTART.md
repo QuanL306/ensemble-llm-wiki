@@ -49,17 +49,18 @@ pip install skill-seekers[all]                  # full (video, async, all platfo
 `compile-llm` and the MCP server's query synthesis work with any of these providers —
 set whichever key you have and the system auto-detects it:
 
-| Provider | Env var | Sign up |
-|----------|---------|---------|
-| DeepSeek | `DEEPSEEK_API_KEY` | platform.deepseek.com |
-| OpenAI | `OPENAI_API_KEY` | platform.openai.com |
-| Kimi (Moonshot) | `MOONSHOT_API_KEY` | platform.moonshot.cn |
-| Claude (Anthropic) | `ANTHROPIC_API_KEY` | console.anthropic.com |
-| Gemini (Google) | `GEMINI_API_KEY` | aistudio.google.com |
-| Zhipu GLM | `ZHIPU_API_KEY` | open.bigmodel.cn |
-| MiniMax | `MINIMAX_API_KEY` | api.minimax.chat |
+| Provider | Env var | Sign up | Region |
+|----------|---------|---------|--------|
+| DeepSeek | `DEEPSEEK_API_KEY` | platform.deepseek.com | Global |
+| OpenAI | `OPENAI_API_KEY` | platform.openai.com | Global |
+| Claude (Anthropic) | `ANTHROPIC_API_KEY` | console.anthropic.com | Global |
+| Gemini (Google) | `GEMINI_API_KEY` | aistudio.google.com | Global |
+| Kimi (Moonshot) | `MOONSHOT_API_KEY` | platform.moonshot.cn | China |
+| Zhipu GLM | `ZHIPU_API_KEY` | open.bigmodel.cn | China |
+| MiniMax | `MINIMAX_API_KEY` | api.minimax.chat | China |
 
-To override auto-detection, set `LLM_BACKEND=deepseek` (or any provider name above).
+Auto-detection picks the first available key in the order above.
+To override, set `LLM_BACKEND=openai` (or any provider name).
 No extra SDK installation is needed — all providers use the standard library only.
 
 ```bash
