@@ -145,7 +145,9 @@ kb compile-llm --full -y
 
 # Use a specific model (overrides provider default)
 kb compile-llm --model gpt-4o
-kb compile-llm --model claude-opus-4-7
+kb compile-llm --model claude-opus-4-7    # most capable
+kb compile-llm --model claude-sonnet-4-6  # balanced (default when using Claude)
+kb compile-llm --model claude-haiku-4-5   # fastest, cheapest
 ```
 
 ### Scenario 4: AI-Powered Research Assistant (Local MCP)

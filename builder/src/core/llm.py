@@ -31,7 +31,7 @@ BACKENDS: Dict[str, Dict[str, Any]] = {
     "claude": {
         "base_url": "https://api.anthropic.com/v1/messages",
         "api_key_env": "ANTHROPIC_API_KEY",
-        "model": "claude-sonnet-4-20250514",
+        "model": "claude-sonnet-4-6",
         "provider": "anthropic",
     },
     "openai": {
