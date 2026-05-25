@@ -172,9 +172,12 @@ def _extract_pdf_normal(doc_path: str) -> str:
                 left_blocks.sort(key=lambda b: b[1])
                 right_blocks.sort(key=lambda b: b[1])
                 center_blocks.sort(key=lambda b: b[1])
-                # Place center blocks (headings, tables) before the column they precede
-                sorted_blocks = left_blocks + right_blocks + center_blocks
-                sorted_blocks.sort(key=lambda b: b[1])
+                # Two-column order: full left column top-to-bottom, then full right
+                # column top-to-bottom. Center blocks (titles, section headings that
+                # span both columns) are interleaved by y-position within each half.
+                # Re-sorting the merged list by y would incorrectly interleave left
+                # and right paragraph text.
+                sorted_blocks = center_blocks + left_blocks + right_blocks
             else:
                 sorted_blocks = sorted(blocks, key=lambda b: (b[1], b[0]))
 
