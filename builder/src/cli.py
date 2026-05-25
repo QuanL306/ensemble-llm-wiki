@@ -264,6 +264,7 @@ def cmd_compile(args):
     
     print(f"\n✅ Compilation complete!")
     print(f"\n💡 Tip: Open {kb_path} in Obsidian to explore")
+    print_kb_status(kb_path)
 
 
 def cmd_fetch(args):
@@ -537,14 +538,8 @@ def cmd_add(args):
                 icon = "✅" if s == "done" else "❌"
                 print(f"   {icon} {stage}")
 
-    # Show registry stats
-    stats = kb.status()
-    reg = stats.get("registry", {})
-    print(f"\n📈 KB Status:")
-    print(f"   Total:    {reg.get('total', 0)}")
-    print(f"   Ingested: {reg.get('ingested', 0)}")
-    print(f"   Compiled: {reg.get('compiled', 0)}")
-    print(f"   Graphed:  {reg.get('graphed', 0)}")
+    # Status report
+    print_kb_status(kb_path)
 
 
 def cmd_graphify(args):
@@ -567,6 +562,7 @@ def cmd_graphify(args):
         print("✅ Graphify complete.")
         graph_out = os.path.join(wiki_dir, "graphify-out")
         print(f"   Output: {graph_out}/")
+        print_kb_status(kb_path)
     else:
         print("❌ Graphify failed. Check that graphify is installed: pip install graphifyy")
 
@@ -2076,55 +2072,113 @@ def cmd_clean(args):
         print(f"   Removed {deleted_articles} wiki article(s)")
 
 
+def _progress_bar(done: int, total: int, width: int = 20) -> str:
+    """Return a filled/empty block progress bar string."""
+    if total == 0:
+        return "░" * width
+    filled = int(width * done / total)
+    return "█" * filled + "░" * (width - filled)
+
+
+def print_kb_status(kb_path: str, header: bool = True) -> None:
+    """Print a structured pipeline status report for a knowledge base.
+
+    Reads from ContentRegistry (.kbregistry.json) for per-stage counts and
+    from IndexManager for ingest-level detail. Safe to call with no registry
+    (falls back gracefully to index-only stats).
+    """
+    from core.registry import ContentRegistry, STATUS_DONE, STATUS_FAILED, STATUS_PENDING
+
+    config = load_config(kb_path)
+    name   = config.get("name", os.path.basename(kb_path))
+    width  = 46
+
+    if header:
+        print(f"\n📚 {name}")
+        print("─" * width)
+
+    # ── Registry stats (ingest / graphify / compile_llm per document) ──
+    reg = ContentRegistry(kb_path)
+    entries = list(reg.data.get("entries", {}).values())
+    total = len(entries)
+
+    if total == 0:
+        # Fall back to IndexManager counts when registry is empty
+        indexer = IndexManager(kb_path)
+        s = indexer.get_stats()
+        print(f"  {s['total']} documents  (no registry yet — run kb add or kb ingest)")
+        print("─" * width)
+        return
+
+    def _count(stage, status):
+        return sum(1 for e in entries
+                   if e.get(stage, {}).get("status") == status)
+
+    ing_done  = _count("ingest",      STATUS_DONE)
+    ing_fail  = _count("ingest",      STATUS_FAILED)
+    grf_done  = _count("graphify",    STATUS_DONE)
+    grf_fail  = _count("graphify",    STATUS_FAILED)
+    cmp_done  = _count("compile_llm", STATUS_DONE)
+    cmp_fail  = _count("compile_llm", STATUS_FAILED)
+
+    print(f"  {total} document{'s' if total != 1 else ''}\n")
+
+    # ── Stage progress bars ──
+    stages = [
+        ("Ingest     ", ing_done, ing_fail, total),
+        ("Graphify   ", grf_done, grf_fail, total),
+        ("Compile LLM", cmp_done, cmp_fail, total),
+    ]
+    for label, done, fail, tot in stages:
+        bar  = _progress_bar(done, tot)
+        pct  = f"{done}/{tot}"
+        tick = "  ✅" if done == tot and tot > 0 else ""
+        warn = f"  ❌ {fail} failed" if fail else ""
+        print(f"  {label}  {bar}  {pct}{tick}{warn}")
+
+    # ── Failed documents ──
+    failures = []
+    for e in entries:
+        name_short = os.path.basename(e.get("source_path", "?"))
+        for stage in ("ingest", "compile_llm", "graphify"):
+            s = e.get(stage, {})
+            if s.get("status") == STATUS_FAILED:
+                err = (s.get("error") or "unknown error")[:70]
+                failures.append((name_short, stage.replace("_", " "), err))
+
+    if failures:
+        print(f"\n  ❌ Failed ({len(failures)}):")
+        for fname, stage, err in failures[:10]:
+            print(f"     • {fname[:45]:<45}  [{stage}] {err}")
+        if len(failures) > 10:
+            print(f"     … and {len(failures) - 10} more")
+
+    # ── "What to run next" recommendation ──
+    suggestions = []
+    if ing_done < total:
+        suggestions.append("kb ingest")
+    if ing_done > 0 and grf_done < ing_done:
+        suggestions.append("kb graphify")
+    if ing_done > 0 and cmp_done < ing_done:
+        suggestions.append("kb compile-llm --docs")
+    if cmp_fail or ing_fail:
+        suggestions.append("kb compile-llm --retry-failed")
+
+    if suggestions:
+        print(f"\n  ▶  Next:  {' && '.join(suggestions[:2])}")
+
+    print("─" * width)
+
+
 def cmd_status(args):
-    """Show status"""
+    """Show knowledge base pipeline status"""
     kb_path = get_kb_path()
-    
     if not kb_path:
         print("❌ Error: Knowledge base config not found")
         return
-    
     config = load_config(kb_path)
-    print(f"📚 Knowledge Base: {config.get('name', 'Unknown')}")
-    print(f"📁 Path: {kb_path}")
-    print(f"📌 Version: {config.get('version', '1.0')}")
-    
-    indexer = IndexManager(kb_path)
-    stats = indexer.get_stats()
-
-    # Count LLM-compiled / failed documents
-    all_files = indexer.index.get("files", {}).values()
-    llm_compiled   = sum(1 for f in all_files if f.get("llm_compiled_at"))
-    llm_failed     = sum(1 for f in all_files
-                         if f.get("compile_failed_at") and not f.get("llm_compiled_at"))
-    total_completed = stats['completed']
-
-    print(f"\n📊 Document Statistics:")
-    print(f"  Total: {stats['total']}")
-    print(f"  ✅ Completed (ingested): {stats['completed']}")
-    print(f"  🤖 LLM compiled: {llm_compiled} / {total_completed}"
-          + ("  ✅" if llm_compiled == total_completed and total_completed > 0 else
-             "  ⚠️  run compile-llm" if llm_compiled < total_completed else ""))
-    if llm_failed:
-        print(f"  ❌ LLM compile failed: {llm_failed}"
-              f"  — run: compile-llm --retry-failed")
-        # Show which ones failed
-        for finfo in indexer.index.get("files", {}).values():
-            if finfo.get("compile_failed_at") and not finfo.get("llm_compiled_at"):
-                err = finfo.get("compile_error", "unknown error")[:80]
-                print(f"     • {finfo.get('name', '?')}  ({err})")
-    print(f"  ⏳ Pending: {stats['pending']}")
-    print(f"  🔄 Processing: {stats['processing']}")
-    print(f"  ❌ Ingest error: {stats['error']}")
-
-    print(f"\n📂 Directory Status:")
-    for dir_name in ["raw", "wiki", "outputs"]:
-        dir_path = os.path.join(kb_path, dir_name)
-        if os.path.exists(dir_path):
-            count = sum(len(files) for _, _, files in os.walk(dir_path))
-            print(f"  {dir_name}/: exists ({count} files)")
-        else:
-            print(f"  {dir_name}/: not found ❌")
+    print(f"📁 {kb_path}  (v{config.get('version', '1.0')})")
+    print_kb_status(kb_path)
 
 
 def main():
