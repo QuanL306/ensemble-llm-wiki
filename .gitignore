@@ -27,3 +27,6 @@ raw/
 
 # Cache
 .hermes/
+
+# Private dev journal — keep local, never publish
+docs/DEV_LOG.md
