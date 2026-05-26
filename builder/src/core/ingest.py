@@ -150,8 +150,13 @@ class DataIngest:
                             contradictions,
                             list(existing_docs.keys()),
                         )
-            except Exception:
-                pass  # Contradiction detection is non-blocking
+                        # Reload indexer from disk so in-memory state reflects
+                        # the contradiction flags just written by flag_contradictions_in_index,
+                        # preventing the next save_index() call from stomping them.
+                        self.indexer.index = self.indexer._load_index()
+            except Exception as e:
+                file_name = os.path.basename(file_path)
+                print(f"  ⚠️  Contradiction detection failed for {file_name}: {e}")
             
             result["success"] = True
             result["metadata"] = metadata

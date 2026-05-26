@@ -121,6 +121,8 @@ def cmd_init(args):
         print(f"❌  Knowledge base already exists at: {folder_path}")
         print(f"   Use --force to reinitialize (WARNING: overwrites .kbaconfig)")
         return
+    if os.path.exists(existing_config) and getattr(args, 'force', False):
+        print(f"   ⚠️  Reinitializing — preserving custom pipeline rules from existing config")
     
     print(f"🚀 Initializing Knowledge Base: {kb_name}")
     print(f"📁 Path: {folder_path}")
@@ -162,6 +164,14 @@ def cmd_init(args):
         }
     }
     
+    # L7: when --force is used, preserve any custom pipeline rules from the old config
+    if os.path.exists(existing_config) and getattr(args, 'force', False):
+        existing = load_config(folder_path)
+        existing_rules = existing.get("pipeline", {}).get("rules", [])
+        if existing_rules:
+            config["pipeline"]["rules"] = existing_rules
+            print(f"   Preserved {len(existing_rules)} custom pipeline rule(s)")
+
     save_config(folder_path, config)
     print(f"  ⚙️  Created: .kbaconfig")
     
@@ -1026,7 +1036,9 @@ def _generate_embeddings(kb_path: str, indexer: 'IndexManager') -> int:
             except Exception as ex:
                 print(f"\n   ⚠️  Embedding failed for {fid}: {ex}")
 
-    # Save
+    # Save — stream directly to disk to avoid building the full JSON string in memory
+    import tempfile as _tf2, os as _os2
+
     embeddings_data = {
         "model": "BAAI/bge-small-en-v1.5",
         "dim": 384,
@@ -1034,8 +1046,21 @@ def _generate_embeddings(kb_path: str, indexer: 'IndexManager') -> int:
         "created_at": datetime.now().isoformat(),
         "vectors": vectors,
     }
-    ensure_dir(meta_dir)
-    write_text(embeddings_file, json.dumps(embeddings_data, indent=2))
+    meta_dir_path = Path(embeddings_file).parent
+    meta_dir_path.mkdir(parents=True, exist_ok=True)
+    if len(vectors) > 1000:
+        print(f"\n   ℹ️  {len(vectors)} vectors — writing directly to disk (streaming mode)")
+    fd, tmp_path = _tf2.mkstemp(dir=str(meta_dir_path), suffix=".tmp")
+    try:
+        with _os2.fdopen(fd, 'w', encoding='utf-8') as f:
+            json.dump(embeddings_data, f, indent=2, ensure_ascii=False)
+        _os2.replace(tmp_path, embeddings_file)
+    except Exception:
+        try:
+            _os2.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
     print(f" ✅  {len(vectors)} vectors → embeddings.json")
     return len(vectors)
@@ -1379,37 +1404,60 @@ def cmd_compile_llm(args):
             print("   Or skip this check with: --skip-graphify-check")
             sys.exit(1)
 
-    # ── Lock file to prevent concurrent compile ────────────────────────
+    # ── Lock file to prevent concurrent compile (atomic O_CREAT|O_EXCL) ────
     lock_file = os.path.join(kb_path, "wiki", "_meta", ".compile.lock")
-    if os.path.exists(lock_file):
+    ensure_dir(os.path.dirname(lock_file))
+
+    lock_fd = None
+    try:
+        lock_fd = os.open(lock_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        os.write(lock_fd, str(os.getpid()).encode())
+        os.close(lock_fd)
+        lock_fd = None
+    except FileExistsError:
+        # Lock exists — check if the owning process is still alive
         try:
             pid = int(read_text(lock_file).strip())
-            os.kill(pid, 0)   # raises if PID doesn't exist
-            # PID exists — verify it's actually a compile-llm process (H3)
+            os.kill(pid, 0)  # raises ProcessLookupError if dead
+            # Verify it's actually a compile-llm process
             import subprocess as _sp
+            result = _sp.run(["ps", "-p", str(pid), "-o", "args="],
+                             capture_output=True, text=True, timeout=3)
+            if "cli.py" in result.stdout or "kb" in result.stdout:
+                print(f"❌  Another compile-llm is running (PID {pid}).")
+                print(f"   If stale, delete: {lock_file}")
+                return
+            # PID reused by unrelated process — steal the lock
+            os.unlink(lock_file)
+            lock_fd = os.open(lock_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            os.write(lock_fd, str(os.getpid()).encode())
+            os.close(lock_fd)
+            lock_fd = None
+        except (ValueError, ProcessLookupError, PermissionError, FileNotFoundError):
+            # Stale lock — remove and re-create
             try:
-                result = _sp.run(["ps", "-p", str(pid), "-o", "args="],
-                                 capture_output=True, text=True, timeout=3)
-                if "cli.py" not in result.stdout and "kb" not in result.stdout:
-                    raise ProcessLookupError("PID reused by unrelated process")
-            except (FileNotFoundError, _sp.TimeoutExpired):
-                pass  # ps not available, fall back to PID-only check
-            print(f"❌  Another compile-llm is running (PID {pid}).")
-            print(f"   If stale, delete: {lock_file}")
-            return
-        except (ValueError, ProcessLookupError, PermissionError):
-            os.unlink(lock_file)  # stale lock
+                os.unlink(lock_file)
+            except OSError:
+                pass
+            lock_fd = os.open(lock_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            os.write(lock_fd, str(os.getpid()).encode())
+            os.close(lock_fd)
+            lock_fd = None
         except Exception:
             pass
+    finally:
+        if lock_fd is not None:
+            os.close(lock_fd)
 
-    ensure_dir(os.path.dirname(lock_file))
-    write_text(lock_file, str(os.getpid()))
     try:
         _cmd_compile_llm_inner(args, kb_path)
     finally:
+        # Only unlink if we own the lock
         try:
-            os.unlink(lock_file)
-        except OSError:
+            stored = int(read_text(lock_file).strip())
+            if stored == os.getpid():
+                os.unlink(lock_file)
+        except (OSError, ValueError):
             pass
 
 
@@ -1722,6 +1770,12 @@ def cmd_deploy(args):
     _validate_deploy_arg("host", host)
     _validate_deploy_arg("remote-user", remote_uid)
     _validate_deploy_arg("kb-id", kb_id)
+    if ssh_user:
+        _validate_deploy_arg("ssh-user", ssh_user)
+    if key_path:
+        if not os.path.isfile(key_path):
+            print(f"❌ SSH key not found: {key_path}")
+            return
 
     dry_run = getattr(args, 'dry_run', False)
     quiet   = getattr(args, 'quiet', False)

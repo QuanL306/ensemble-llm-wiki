@@ -222,13 +222,19 @@ class SkillSeekersIntegration:
     @staticmethod
     def _make_slug(text: str) -> str:
         """Turn a URL or name into an ASCII filesystem-safe slug."""
+        import hashlib as _hashlib
+        original_source = text
         # Strip scheme
         slug = re.sub(r'^https?://', '', text)
         # Keep only ASCII alphanumeric and underscores; replace everything else
         slug = re.sub(r'[^a-zA-Z0-9_]+', '_', slug)
         slug = slug.strip('_').lower()
-        # Truncate to 64 chars
-        slug = slug[:64]
+        # Truncate to 60 chars (leave room for 4-char hash suffix)
+        slug = slug[:60]
+        # Append a short hash to prevent collisions between sources that share
+        # the same 60-character prefix after normalization
+        slug_hash = _hashlib.md5(original_source.encode()).hexdigest()[:4]
+        slug = f"{slug}_{slug_hash}" if slug else slug_hash
         return slug or "skill"
 
     @staticmethod

@@ -12,7 +12,9 @@ Detection methods:
   3. Temporal: newer source contradicts older source on the same topic
 """
 import json
+import os as _os
 import re
+import tempfile as _tf
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -101,7 +103,10 @@ def detect_contradictions(
     
     Args:
         new_doc_text: full text of the newly ingested document
-        existing_docs: {doc_name: text_content} of existing documents
+        existing_docs: {file_id: text_content} of existing documents.
+            Note: keys are IndexManager file_ids (MD5 of relative path), NOT
+            human-readable names. source_b in contradiction records will
+            therefore be a file_id, not a filename.
         new_doc_name: name of the new document
     
     Returns:
@@ -168,5 +173,14 @@ def flag_contradictions_in_index(
             })
             b_info["contradictions_flagged_by"] = b_list
 
-    with open(index_path, "w") as f:
-        json.dump(idx, f, indent=2, ensure_ascii=False)
+    fd, tmp_path = _tf.mkstemp(dir=str(Path(index_path).parent), suffix=".tmp")
+    try:
+        with _os.fdopen(fd, 'w', encoding='utf-8') as f:
+            json.dump(idx, f, indent=2, ensure_ascii=False)
+        _os.replace(tmp_path, str(index_path))
+    except Exception:
+        try:
+            _os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise

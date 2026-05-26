@@ -887,6 +887,9 @@ class KnowledgeBaseMCPServer:
         slug = re.sub(r'\s+', '_', slug)
         slug = re.sub(r'[^\w]', '', slug)
         slug = slug[:60]
+        if not slug:
+            import hashlib
+            slug = "synthesis_" + hashlib.md5(question.encode()).hexdigest()[:12]
 
         syntheses_dir = kb_path / "wiki" / "syntheses"
         syntheses_dir.mkdir(parents=True, exist_ok=True)

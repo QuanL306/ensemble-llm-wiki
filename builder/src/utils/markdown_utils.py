@@ -19,7 +19,7 @@ def extract_section(content: str, section_title: str) -> str:
             level = len(m.group(1))
             title = m.group(2).strip()
             if not in_section:
-                if section_title.lower() in title.lower():
+                if section_title.lower() == title.lower():
                     in_section = True
                     section_level = level
                     result.append(line)

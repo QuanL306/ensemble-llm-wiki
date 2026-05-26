@@ -76,6 +76,10 @@ INTERNAL_SECRET = os.getenv("INTERNAL_SECRET", "")
 # Shared HTTP client — reuses connections across proxy requests
 _http_client: Optional[httpx.AsyncClient] = None
 
+# Usage fallback path — configurable via env var (M4)
+from pathlib import Path as _Path
+USAGE_FALLBACK_PATH = _Path(os.getenv("USAGE_FALLBACK_PATH", "/data/usage_fallback.log"))
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -272,6 +276,11 @@ async def verify_jwt_token(credentials: HTTPAuthorizationCredentials = Depends(s
             except Exception as exc:
                 log.error("Redis unavailable during JWT revocation check: %s", exc)
                 raise HTTPException(status_code=503, detail="Authentication service temporarily unavailable")
+        if payload.get("type") == "refresh":
+            raise HTTPException(
+                status_code=401,
+                detail="Refresh tokens cannot be used for API access — use the access token"
+            )
         return payload
     except HTTPException:
         raise
@@ -516,8 +525,12 @@ async def logout(user: dict = Depends(verify_jwt_token)):
     """Revoke the current access token (and optionally a refresh token) via per-jti Redis keys."""
     jti = user.get("jti")
     if jti and redis_client:
-        exp = user.get("exp", int(time.time()) + 3600)
-        ttl = max(exp - int(time.time()), 1)
+        exp = user.get("exp")
+        if exp is None:
+            log.warning("JWT missing exp claim during revocation; using 24h TTL for jti=%s", jti)
+            ttl = 86400  # 24h default — long enough to cover any reasonable token lifetime
+        else:
+            ttl = max(int(exp) - int(time.time()), 60)  # minimum 60s, not 1s
         try:
             await redis_client.setex(f"jwt_jti:{jti}", ttl, "1")
         except Exception as exc:
@@ -672,6 +685,11 @@ async def _proxy_to_mcp(request: Request, path: str, method: str) -> Response:
         )
         raise HTTPException(status_code=429, detail="Quota exceeded")
 
+    # NOTE: X-KB-Owner-ID is forwarded to the MCP server which enforces its own
+    # access control. The gateway does not pre-validate ownership to avoid
+    # duplicating the MCP server's member-lookup logic. TODO: add a Redis-backed
+    # fast path here to short-circuit obviously-invalid owner IDs and reduce
+    # MCP round-trips under adversarial traffic.
     forwarded_headers = {
         "X-User-ID":        user_id,
         "X-KB-ID":          kb_id,
@@ -703,9 +721,14 @@ async def _proxy_to_mcp(request: Request, path: str, method: str) -> Response:
                 },
             )
 
-        # Fire-and-forget usage logging
+        # Fire-and-forget usage logging (M5: extract IP before task creation to
+        # avoid capturing the full request object in the task closure)
+        client_ip = (
+            (request.headers.get("X-Forwarded-For", "") or "").split(",")[0].strip()
+            or (request.client.host if request.client else "unknown")
+        )
         asyncio.create_task(
-            _record_usage(api_key, user_id, path, request)
+            _record_usage(api_key, user_id, path, client_ip)
         )
 
         safe_headers = {
@@ -747,24 +770,22 @@ async def mcp_proxy_post(path: str, request: Request):
     return await _proxy_to_mcp(request, path, "POST")
 
 
-async def _record_usage(api_key: str, user_id: str, path: str, request: Request):
+async def _record_usage(api_key: str, user_id: str, path: str, client_ip: str):
     """
     Persist usage to Redis for the /api/v1/usage/stats endpoint.
     Stores a JSON string so it's machine-parseable if ever replayed.
     Keeps the last 10 000 entries (LPUSH + LTRIM).
     On failure, logs an error-level alert and appends to a local fallback file
     so usage records are not silently lost (M4).
+    Accepts client_ip as a pre-resolved string (M5: avoids capturing request object).
     """
-    from pathlib import Path as _Path
     from datetime import datetime as _datetime
 
-    req_id = getattr(getattr(request, "state", None), "req_id", "-")
     entry = json.dumps({
-        "req_id":     req_id,
         "key_prefix": redact_key(api_key),
         "user_id":    user_id,
         "path":       path,
-        "ip":         request.client.host if request.client else "?",
+        "ip":         client_ip,
         "ts":         time.time(),
     }, ensure_ascii=False)
     try:
@@ -777,18 +798,17 @@ async def _record_usage(api_key: str, user_id: str, path: str, request: Request)
             "USAGE_RECORD_FAILURE user=%s tokens=%s ts=%s err=%s",
             user_id, token_count, timestamp, exc
         )
-        # Fallback: append to a local file so usage isn't lost entirely
+        # Fallback: append to a configurable file so usage isn't lost entirely (M4)
         try:
-            fallback_path = _Path("/data/usage_fallback.log")
-            fallback_path.parent.mkdir(parents=True, exist_ok=True)
-            with fallback_path.open("a") as f:
+            USAGE_FALLBACK_PATH.parent.mkdir(parents=True, exist_ok=True)
+            with USAGE_FALLBACK_PATH.open("a") as f:
                 f.write(json.dumps({
                     "user": user_id, "tokens": token_count,
                     "ts": str(_datetime.utcnow()), "err": str(exc),
                     "entry": entry,
                 }) + "\n")
-        except Exception:
-            pass  # truly last resort
+        except Exception as fallback_exc:
+            log.error("USAGE_FALLBACK_WRITE_FAILURE path=%s err=%s", USAGE_FALLBACK_PATH, fallback_exc)
 
 
 # ============ Usage Stats ============
@@ -852,7 +872,7 @@ async def add_kb_member(
         raise HTTPException(status_code=503, detail="Service temporarily unavailable")
 
     if not member_data:
-        raise HTTPException(status_code=404, detail="No user registered with that email")
+        raise HTTPException(status_code=404, detail="User not found or cannot be added as a member")
 
     member_user_id = member_data["user_id"]
 
@@ -902,7 +922,7 @@ async def remove_kb_member(
         raise HTTPException(status_code=503, detail="Service temporarily unavailable")
 
     if not member_data:
-        raise HTTPException(status_code=404, detail="No user registered with that email")
+        raise HTTPException(status_code=404, detail="User not found or cannot be added as a member")
 
     member_user_id = member_data["user_id"]
 

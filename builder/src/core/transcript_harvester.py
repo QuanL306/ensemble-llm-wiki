@@ -49,9 +49,9 @@ _SCRUB_PATTERNS = [
     (re.compile(
         r'(postgres|postgresql|mysql|mongodb|redis)://[^\s<>"\']+:[^\s<>"\']+@[^\s<>"\',]+'
     ), '[REDACTED]'),
-    # PEM private key blocks — redact the entire block
+    # PEM/PGP private key blocks — redact the entire block
     (re.compile(
-        r'-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----'
+        r'-----BEGIN (?:[A-Z ]*PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----[\s\S]*?-----END (?:[A-Z ]*PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----'
     ), '[REDACTED]'),
     # Generic secret/token patterns
     (re.compile(

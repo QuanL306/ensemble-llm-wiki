@@ -150,8 +150,11 @@ def _extract_pdf_normal(doc_path: str) -> str:
     """Extract normal PDF text"""
     import fitz
 
+    MAX_EXTRACT_BYTES = 50 * 1024 * 1024  # 50 MB cap
+
     with fitz.open(doc_path) as doc:
         pages_text = []
+        total_bytes = 0
 
         for page_num, page in enumerate(doc, 1):
             blocks = page.get_text("blocks")
@@ -168,7 +171,7 @@ def _extract_pdf_normal(doc_path: str) -> str:
             # Two-column detection: require a clear gap between left and right block clusters
             # as well as sufficient blocks on each side. This avoids false positives from
             # pages with figures, tables, or margin annotations.
-            if len(left_blocks) > 3 and len(right_blocks) > 3:
+            if len(left_blocks) >= 3 and len(right_blocks) >= 3:
                 # Check there's a real gap between the rightmost left-column block edge
                 # and the leftmost right-column block edge
                 left_max_x = max(b[2] for b in left_blocks)  # right edge of left blocks
@@ -198,7 +201,14 @@ def _extract_pdf_normal(doc_path: str) -> str:
                 if text:
                     page_text += text + "\n"
 
+            total_bytes += len(page_text.encode('utf-8'))
             pages_text.append(page_text)
+            if total_bytes > MAX_EXTRACT_BYTES:
+                pages_text.append(
+                    f"\n--- [TRUNCATED: document exceeded {MAX_EXTRACT_BYTES // 1_000_000}MB extract limit "
+                    f"at page {page_num}/{len(doc)}. Remaining pages omitted.] ---\n"
+                )
+                break
 
     return "\n".join(pages_text)
 
@@ -250,6 +260,8 @@ def _extract_pdf_scanned(doc_path: str, lang: str = None) -> str:
 
         pages_text = []
         failed_pages = 0
+        total_bytes = 0
+        MAX_EXTRACT_BYTES = 50 * 1024 * 1024  # 50 MB cap
 
         print(f"Detected scanned PDF, {len(doc)} pages, starting OCR...")
 
@@ -264,9 +276,20 @@ def _extract_pdf_scanned(doc_path: str, lang: str = None) -> str:
                 img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
 
                 text = pytesseract.image_to_string(img, lang=lang)
+                img.close()   # release PIL memory immediately
+                del img
+                pix = None    # release fitz pixmap
                 text = _clean_ocr_text(text)
 
-                pages_text.append(f"\n--- Page {page_num} ---\n{text}\n")
+                page_text = f"\n--- Page {page_num} ---\n{text}\n"
+                total_bytes += len(page_text.encode('utf-8'))
+                pages_text.append(page_text)
+                if total_bytes > MAX_EXTRACT_BYTES:
+                    pages_text.append(
+                        f"\n--- [TRUNCATED: document exceeded {MAX_EXTRACT_BYTES // 1_000_000}MB extract limit "
+                        f"at page {page_num}/{len(doc)}. Remaining pages omitted.] ---\n"
+                    )
+                    break
             except Exception as e:
                 failed_pages += 1
                 pages_text.append(f"\n--- Page {page_num} ---\n[OCR failed: {e}]\n")
@@ -327,6 +350,7 @@ def _extract_epub(epub_path: str) -> str:
 
     chapters_text = []
     chapter_num = 0
+    failed_chapters = 0
 
     for item in book.get_items():
         if not hasattr(item, 'get_content'):
@@ -338,8 +362,12 @@ def _extract_epub(epub_path: str) -> str:
             continue
         chapter_num += 1
         try:
-            html_content = item.get_content().decode('utf-8', errors='ignore')
-        except Exception:
+            html_content = item.get_content().decode('utf-8', errors='replace')
+        except Exception as e:
+            failed_chapters += 1
+            chapters_text.append(
+                f"\n=== Chapter {chapter_num} [EXTRACTION FAILED: {e}] ===\n"
+            )
             continue
         soup = BeautifulSoup(html_content, 'html.parser')
 
@@ -359,6 +387,11 @@ def _extract_epub(epub_path: str) -> str:
         chapter_header += " ===\n"
 
         chapters_text.append(chapter_header + text + "\n")
+
+    if failed_chapters > 0:
+        chapters_text.append(
+            f"\n\n[NOTE: {failed_chapters} chapter(s) failed to extract and are omitted above.]\n"
+        )
 
     return "\n".join(chapters_text)
 

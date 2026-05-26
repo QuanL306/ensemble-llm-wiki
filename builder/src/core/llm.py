@@ -486,8 +486,9 @@ def _call_minimax(
     elif "choices" in data and data["choices"]:
         content = data["choices"][0].get("message", {}).get("content", "")
     else:
-        # Unknown format — return raw JSON so caller can debug
-        content = json.dumps(data, ensure_ascii=False)
+        # Unknown format — return a structured error message rather than raw JSON
+        # (raw JSON may be large or contain internal API details)
+        content = f"[ERROR: Unexpected MiniMax response format. Keys: {list(data.keys())}]"
         print(f"[llm] MiniMax: unrecognized response format, keys={list(data.keys())[:5]}",
               file=sys.stderr)
 

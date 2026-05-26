@@ -34,7 +34,11 @@ log = get_logger(__name__)
 # Shared-secret authentication between gateway and MCP server (C1)
 INTERNAL_SECRET = os.environ.get("INTERNAL_SECRET", "")
 if not INTERNAL_SECRET:
-    log.warning("INTERNAL_SECRET not set — MCP server is unauthenticated")
+    raise RuntimeError(
+        "INTERNAL_SECRET env var is not set. "
+        "The MCP server refuses to start without it — set it in docker-compose or your environment. "
+        "Generate one with: python3 -c \"import secrets; print(secrets.token_hex(32))\""
+    )
 
 
 def _verify_internal(request: Request):
@@ -57,11 +61,17 @@ MAX_REQUEST_BODY_BYTES = 10 * 1024 * 1024  # 10 MB
 class _BodySizeLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         content_length = request.headers.get("content-length")
-        if content_length and int(content_length) > MAX_REQUEST_BODY_BYTES:
-            return JSONResponse(
-                status_code=413,
-                content={"detail": f"Request body too large (max {MAX_REQUEST_BODY_BYTES // 1024 // 1024} MB)"},
-            )
+        # H5: Pre-check Content-Length to reject large requests before reading any body data
+        if content_length:
+            try:
+                cl = int(content_length)
+                if cl > MAX_REQUEST_BODY_BYTES:
+                    return JSONResponse(
+                        {"error": f"Request body too large (Content-Length: {cl} > {MAX_REQUEST_BODY_BYTES})"},
+                        status_code=413
+                    )
+            except ValueError:
+                pass
         # Enforce on actual bytes for chunked-encoding requests (no Content-Length)
         if not content_length:
             total = 0
@@ -123,6 +133,15 @@ class ResourceRequest(BaseModel):
 EXPECTED_SCHEMA_VERSION = "1.4"
 
 
+def _safe_log_val(v: str, max_len: int = 80) -> str:
+    """Sanitize a user-controlled value for safe structured logging (M1)."""
+    if not isinstance(v, str):
+        return repr(v)[:max_len]
+    # Remove newlines, tabs, and control chars that could break log parsers
+    cleaned = re.sub(r'[\x00-\x1f\x7f]', '_', v)
+    return cleaned[:max_len]
+
+
 def _warn_schema(index: dict, user_id: str, kb_id: str) -> None:
     """Log a warning if file_index.json was built by an older builder version."""
     found = index.get("schema_version", "pre-1.2")
@@ -130,8 +149,8 @@ def _warn_schema(index: dict, user_id: str, kb_id: str) -> None:
         log.warning(
             "index_schema_mismatch",
             extra={
-                "user_id":   user_id,
-                "kb_id":     kb_id,
+                "user_id":   _safe_log_val(user_id),
+                "kb_id":     _safe_log_val(kb_id),
                 "found":     found,
                 "expected":  EXPECTED_SCHEMA_VERSION,
                 "error":     "Retrieval quality may be reduced. Run compile-llm --docs.",
@@ -739,10 +758,13 @@ def _sanitize_path_component(value: str) -> str:
     """
     Strip path-traversal and dangerous characters from a filesystem path segment.
     Rejects empty strings and any component containing '..' or '/' or '\\'.
+    Also strips leading dots to prevent hidden files like .htaccess, .git (L4).
     """
     cleaned = re.sub(r'[<>"|?*\x00-\x1f]', '', value)
     if '..' in cleaned or '/' in cleaned or '\\' in cleaned:
         return ''
+    # Strip leading dots (prevents hidden files like .htaccess, .git)
+    cleaned = cleaned.lstrip('.')
     return cleaned.strip() or ''
 
 
@@ -988,7 +1010,7 @@ async def mcp_call_tool(body: ToolCallRequest, request: Request):
 
     log.info(
         "tool_call_start",
-        extra={"req_id": req_id, "user_id": user_id, "kb_id": kb_id, "tool": tool_name},
+        extra={"req_id": req_id, "user_id": _safe_log_val(user_id), "kb_id": _safe_log_val(kb_id), "tool": tool_name},
     )
 
     try:
@@ -1296,6 +1318,8 @@ async def mcp_call_tool(body: ToolCallRequest, request: Request):
             async with _get_kb_write_lock(owner_id, kb_id):
               safe_name = re.sub(r'[^\w\s-]', '', title).strip()
               safe_name = re.sub(r'[\s]+', '_', safe_name).lower()
+              if not safe_name:
+                  safe_name = "article_" + hashlib.md5(title.encode()).hexdigest()[:12]
               kb_path = kb_manager.get_kb_path(owner_id, kb_id)
               articles_dir = kb_path / "wiki" / "_articles"
               articles_dir.mkdir(parents=True, exist_ok=True)
@@ -1413,6 +1437,8 @@ async def mcp_call_tool(body: ToolCallRequest, request: Request):
             slug = re.sub(r'\s+', '_', slug)
             slug = re.sub(r'[^\w]', '', slug)
             slug = slug[:60]
+            if not slug:
+                slug = "article_" + hashlib.md5(question.encode()).hexdigest()[:12]
 
             async with _get_kb_write_lock(owner_id, kb_id):
                 kb_path = kb_manager.get_kb_path(owner_id, kb_id)
@@ -1461,8 +1487,8 @@ async def mcp_call_tool(body: ToolCallRequest, request: Request):
             "tool_call_error",
             extra={
                 "req_id":      req_id,
-                "user_id":     user_id,
-                "kb_id":       kb_id,
+                "user_id":     _safe_log_val(user_id),
+                "kb_id":       _safe_log_val(kb_id),
                 "tool":        tool_name,
                 "duration_ms": duration_ms,
                 "error":       f"{type(exc).__name__}: {exc}",
