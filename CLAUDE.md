@@ -140,6 +140,17 @@ kb compile-llm --full --yes
 
 # Retry only failed documents:
 kb compile-llm --retry-failed
+
+# Target a single document by name fragment:
+kb ingest --file report.pdf
+kb compile-llm --file report.pdf
+
+# Skip a broken document permanently (won't be processed again):
+kb skip broken-scan.pdf
+
+# Restore a skipped document:
+kb unskip broken-scan.pdf
+kb ingest --retry-failed          # then re-process it
 ```
 
 ---
@@ -238,6 +249,8 @@ my-kb/
 | PDF text is garbled / empty | Scanned PDF, no OCR | `brew install tesseract poppler` |
 | `kb` command not found | Not on PATH | `export PATH="$PATH:/path/to/knowledge-base-suite-en"` |
 | `kb graphify` fails silently | graphify not installed | `pip install graphifyy` |
-| `kb add` skips compile | graphify hasn't run yet | Run `kb graphify` first, or use `kb add --skip-graphify-check` |
+| `kb add` skips compile | graphify hasn't run yet | Run `kb graphify` first, or use `--skip-graphify-check` |
 | Registry out of sync | Manual file edits | `kb clean` to remove stale entries |
 | MCP server finds no documents | compile-llm not run | Run `kb compile-llm` before starting server |
+| One PDF fails repeatedly | Corrupt / encrypted file | `kb skip broken.pdf` to exclude it permanently |
+| Need to reprocess one file | Hash unchanged since last run | `kb ingest --file myfile.pdf` or `--retry-failed` |

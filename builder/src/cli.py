@@ -183,55 +183,78 @@ See project documentation for more details.
 def cmd_ingest(args):
     """Ingest documents"""
     kb_path = get_kb_path()
-    
+
     if not kb_path:
         print("❌ Error: Knowledge base config not found (.kbaconfig)")
         print("   Please run: python src/cli.py init <folder_path>")
         return
-    
+
     config = load_config(kb_path)
     print(f"📚 Knowledge Base: {config.get('name', 'Unknown')}")
     print(f"📁 Path: {kb_path}")
-    
+
     ingest = DataIngest(kb_path, config)
-    
+
+    retry_failed = getattr(args, 'retry_failed', False)
+    file_filter  = getattr(args, 'file', None)
+
     print("\n🔍 Scanning documents...")
     scan_result = ingest.scan(incremental=not args.full)
-    
+
     print(f"  New: {len(scan_result['new'])}")
     print(f"  Changed: {len(scan_result['changed'])}")
     print(f"  Unchanged: {len(scan_result['unchanged'])}")
-    
+
     if scan_result['unsupported']:
         print(f"  Unsupported: {len(scan_result['unsupported'])}")
-    
+
     to_process = scan_result['new'] + scan_result['changed']
-    
+
+    # --retry-failed: add files that errored in a previous run
+    if retry_failed:
+        failed_entries = ingest.indexer.get_all_files('error')
+        failed_paths   = [f.get('path') for f in failed_entries if f.get('path')]
+        existing_set   = set(to_process)
+        added = [p for p in failed_paths if p and p not in existing_set]
+        if added:
+            print(f"  Retrying: {len(added)} previously failed file(s)")
+            to_process += added
+        else:
+            print("  No previously failed files to retry.")
+
+    # --file: target a single document by name fragment
+    if file_filter:
+        before = len(to_process)
+        to_process = [
+            p for p in to_process
+            if file_filter.lower() in os.path.basename(p).lower()
+        ]
+        if not to_process:
+            print(f"\n⚠️  No files matched --file '{file_filter}' "
+                  f"(searched {before} candidates)")
+            return
+        print(f"  Filter '--file {file_filter}': {len(to_process)} match(es)")
+
     if not to_process:
         print("\n✅ All documents are up to date")
+        print_kb_status(kb_path)
         return
-    
+
     print(f"\n🔄 Processing {len(to_process)} documents...")
-    
+
     for i, file_path in enumerate(to_process, 1):
         print(f"\n  [{i}/{len(to_process)}] {os.path.basename(file_path)}")
         result = ingest.process_file(file_path)
-        
+
         if result['success']:
             print(f"      ✅ Success")
             metadata = result.get('metadata', {})
             print(f"      📊 Words: {metadata.get('word_count', 0)}")
         else:
             print(f"      ❌ Failed: {result.get('error', 'Unknown error')}")
-    
+
     print(f"\n✅ Ingest complete!")
-    
-    stats = ingest.get_stats()
-    index_stats = stats['index']
-    print(f"\n📈 Statistics:")
-    print(f"  Total: {index_stats['total']}")
-    print(f"  Completed: {index_stats['completed']}")
-    print(f"  Pending: {index_stats['pending']}")
+    print_kb_status(kb_path)
 
 
 def cmd_compile(args):
@@ -1376,6 +1399,21 @@ def _cmd_compile_llm_inner(args, kb_path: str):
                     and not f.get("compile_failed_at")
                 ]
 
+            # --file: target a single document by name fragment
+            file_filter = getattr(args, 'file', None)
+            if file_filter:
+                before = len(pending)
+                pending = [
+                    f for f in pending
+                    if file_filter.lower() in f.get("name", "").lower()
+                ]
+                if not pending:
+                    print(f"\n⚠️  No pending documents matched --file '{file_filter}' "
+                          f"(searched {before} candidates)")
+                    run_docs = False
+                else:
+                    print(f"  Filter '--file {file_filter}': {len(pending)} match(es)")
+
             n_failed_prev = sum(
                 1 for f in completed if f.get("compile_failed_at")
                 and not f.get("llm_compiled_at")
@@ -2072,6 +2110,147 @@ def cmd_clean(args):
         print(f"   Removed {deleted_articles} wiki article(s)")
 
 
+def cmd_skip(args):
+    """Mark a document as permanently skipped in both ContentRegistry and IndexManager.
+
+    Finds the document by partial filename match. All non-DONE pipeline stages
+    are set to STATUS_SKIPPED so compile-llm and graphify won't attempt them.
+    The IndexManager entry is also marked 'skipped' so ingest retries skip it.
+
+    Usage: kb skip <name-fragment>
+    """
+    kb_path = get_kb_path()
+    if not kb_path:
+        print("❌ Error: Knowledge base config not found")
+        return
+
+    from core.registry import ContentRegistry, STATUS_DONE, STATUS_FAILED, STATUS_PENDING, STATUS_SKIPPED
+
+    pattern = args.file.lower()
+    reg     = ContentRegistry(kb_path)
+    indexer = IndexManager(kb_path)
+
+    # Find matching entries in ContentRegistry
+    matches = [
+        (key, entry) for key, entry in reg.data["entries"].items()
+        if pattern in os.path.basename(entry.get("source_path", "")).lower()
+    ]
+
+    if not matches:
+        # Fallback: search IndexManager for entries not yet in registry
+        index_matches = [
+            f for f in indexer.get_all_files()
+            if pattern in (f.get("name") or "").lower()
+        ]
+        if not index_matches:
+            print(f"❌ No documents found matching '{args.file}'")
+            return
+        print(f"⚠️  Found {len(index_matches)} match(es) only in IndexManager (not yet in registry):")
+        for f in index_matches[:5]:
+            print(f"   • {f.get('name', '?')}")
+        print("   Run 'kb ingest' first to register these files, then skip them.")
+        return
+
+    if len(matches) > 1:
+        print(f"⚠️  '{args.file}' matched {len(matches)} documents — be more specific:")
+        for key, entry in matches[:8]:
+            print(f"   • {os.path.basename(entry.get('source_path', key))}")
+        return
+
+    key, entry = matches[0]
+    name = os.path.basename(entry.get("source_path", key))
+
+    # Mark non-DONE stages as SKIPPED in registry
+    changed_stages = []
+    for stage in ("ingest", "compile_llm", "graphify"):
+        stage_info = entry.get(stage, {})
+        if stage_info.get("status") != STATUS_DONE:
+            reg.set_stage(key, stage, STATUS_SKIPPED)
+            changed_stages.append(stage)
+    reg.save()
+
+    # Mark IndexManager entry as skipped
+    fid = indexer.generate_file_id(entry.get("source_path", key)
+                                   if os.path.isabs(entry.get("source_path", ""))
+                                   else os.path.join(kb_path, entry.get("source_path", key)))
+    if fid in indexer.index.get("files", {}):
+        indexer.index["files"][fid]["status"] = "skipped"
+        indexer.save_index()
+
+    print(f"⏭️  Skipped: {name}")
+    if changed_stages:
+        print(f"   Stages marked skipped: {', '.join(changed_stages)}")
+    else:
+        print("   (all stages were already done — nothing to skip)")
+    print(f"\n   To undo: kb unskip '{args.file}'")
+
+
+def cmd_unskip(args):
+    """Restore a previously skipped document to pending/retry state.
+
+    Resets STATUS_SKIPPED stages back to STATUS_PENDING in ContentRegistry
+    and restores the IndexManager status so ingest + compile will process it.
+
+    Usage: kb unskip <name-fragment>
+    """
+    kb_path = get_kb_path()
+    if not kb_path:
+        print("❌ Error: Knowledge base config not found")
+        return
+
+    from core.registry import ContentRegistry, STATUS_DONE, STATUS_PENDING, STATUS_SKIPPED
+
+    pattern = args.file.lower()
+    reg     = ContentRegistry(kb_path)
+    indexer = IndexManager(kb_path)
+
+    matches = [
+        (key, entry) for key, entry in reg.data["entries"].items()
+        if pattern in os.path.basename(entry.get("source_path", "")).lower()
+    ]
+
+    if not matches:
+        print(f"❌ No documents found matching '{args.file}'")
+        return
+
+    if len(matches) > 1:
+        print(f"⚠️  '{args.file}' matched {len(matches)} documents — be more specific:")
+        for key, entry in matches[:8]:
+            print(f"   • {os.path.basename(entry.get('source_path', key))}")
+        return
+
+    key, entry = matches[0]
+    name = os.path.basename(entry.get("source_path", key))
+
+    # Reset SKIPPED stages back to PENDING
+    reset_stages = []
+    for stage in ("ingest", "compile_llm", "graphify"):
+        stage_info = entry.get(stage, {})
+        if stage_info.get("status") == STATUS_SKIPPED:
+            reg.set_stage(key, stage, STATUS_PENDING)
+            reset_stages.append(stage)
+    reg.save()
+
+    # Reset IndexManager status to "error" so --retry-failed or --full picks it up
+    src = entry.get("source_path", key)
+    abs_src = src if os.path.isabs(src) else os.path.join(kb_path, src)
+    fid = indexer.generate_file_id(abs_src)
+    if fid in indexer.index.get("files", {}):
+        current_status = indexer.index["files"][fid].get("status", "pending")
+        if current_status == "skipped":
+            # Reset to "error" so --retry-failed picks it up, or "pending" if never completed
+            completed_at = indexer.index["files"][fid].get("completed_at")
+            indexer.index["files"][fid]["status"] = "error" if completed_at else "pending"
+        indexer.save_index()
+
+    print(f"✅ Unskipped: {name}")
+    if reset_stages:
+        print(f"   Stages reset to pending: {', '.join(reset_stages)}")
+        print(f"\n   Run: kb ingest --retry-failed && kb compile-llm --retry-failed")
+    else:
+        print("   (no skipped stages found — was it already unskipped?)")
+
+
 def _progress_bar(done: int, total: int, width: int = 20) -> str:
     """Return a filled/empty block progress bar string."""
     if total == 0:
@@ -2087,7 +2266,8 @@ def print_kb_status(kb_path: str, header: bool = True) -> None:
     from IndexManager for ingest-level detail. Safe to call with no registry
     (falls back gracefully to index-only stats).
     """
-    from core.registry import ContentRegistry, STATUS_DONE, STATUS_FAILED, STATUS_PENDING
+    from core.registry import (ContentRegistry,
+                                STATUS_DONE, STATUS_FAILED, STATUS_PENDING, STATUS_SKIPPED)
 
     config = load_config(kb_path)
     name   = config.get("name", os.path.basename(kb_path))
@@ -2116,25 +2296,37 @@ def print_kb_status(kb_path: str, header: bool = True) -> None:
 
     ing_done  = _count("ingest",      STATUS_DONE)
     ing_fail  = _count("ingest",      STATUS_FAILED)
+    ing_skip  = _count("ingest",      STATUS_SKIPPED)
     grf_done  = _count("graphify",    STATUS_DONE)
     grf_fail  = _count("graphify",    STATUS_FAILED)
     cmp_done  = _count("compile_llm", STATUS_DONE)
     cmp_fail  = _count("compile_llm", STATUS_FAILED)
 
-    print(f"  {total} document{'s' if total != 1 else ''}\n")
+    # Effective total for progress bars excludes globally-skipped docs
+    # (a doc is "globally skipped" when ALL three stages are skipped)
+    n_all_skipped = sum(
+        1 for e in entries
+        if all(e.get(s, {}).get("status") == STATUS_SKIPPED
+               for s in ("ingest", "compile_llm", "graphify"))
+    )
+    effective = total - n_all_skipped
+
+    suffix = f"  ({n_all_skipped} skipped)" if n_all_skipped else ""
+    print(f"  {total} document{'s' if total != 1 else ''}{suffix}\n")
 
     # ── Stage progress bars ──
     stages = [
-        ("Ingest     ", ing_done, ing_fail, total),
-        ("Graphify   ", grf_done, grf_fail, total),
-        ("Compile LLM", cmp_done, cmp_fail, total),
+        ("Ingest     ", ing_done, ing_fail, ing_skip, effective),
+        ("Graphify   ", grf_done, grf_fail, 0,        effective),
+        ("Compile LLM", cmp_done, cmp_fail, 0,        effective),
     ]
-    for label, done, fail, tot in stages:
+    for label, done, fail, skip, tot in stages:
         bar  = _progress_bar(done, tot)
         pct  = f"{done}/{tot}"
         tick = "  ✅" if done == tot and tot > 0 else ""
         warn = f"  ❌ {fail} failed" if fail else ""
-        print(f"  {label}  {bar}  {pct}{tick}{warn}")
+        skp  = f"  ⏭ {skip} skipped" if skip else ""
+        print(f"  {label}  {bar}  {pct}{tick}{warn}{skp}")
 
     # ── Failed documents ──
     failures = []
@@ -2152,10 +2344,26 @@ def print_kb_status(kb_path: str, header: bool = True) -> None:
             print(f"     • {fname[:45]:<45}  [{stage}] {err}")
         if len(failures) > 10:
             print(f"     … and {len(failures) - 10} more")
+        print(f"     → kb compile-llm --retry-failed  |  kb skip <name>")
+
+    # ── Skipped documents (all-stage skips only) ──
+    if n_all_skipped:
+        skipped_names = [
+            os.path.basename(e.get("source_path", "?"))
+            for e in entries
+            if all(e.get(s, {}).get("status") == STATUS_SKIPPED
+                   for s in ("ingest", "compile_llm", "graphify"))
+        ]
+        print(f"\n  ⏭  Skipped ({n_all_skipped}):")
+        for sname in skipped_names[:5]:
+            print(f"     • {sname}")
+        if len(skipped_names) > 5:
+            print(f"     … and {len(skipped_names) - 5} more")
+        print(f"     → kb unskip <name>  to restore")
 
     # ── "What to run next" recommendation ──
     suggestions = []
-    if ing_done < total:
+    if ing_done < effective:
         suggestions.append("kb ingest")
     if ing_done > 0 and grf_done < ing_done:
         suggestions.append("kb graphify")
@@ -2190,8 +2398,13 @@ def main():
   python src/cli.py init ~/my-kb --name "My KB"
   python src/cli.py add book.pdf article.md
   python src/cli.py ingest
+  python src/cli.py ingest --retry-failed
+  python src/cli.py ingest --file report.pdf
   python src/cli.py compile-llm --docs
+  python src/cli.py compile-llm --file report.pdf
   python src/cli.py graphify
+  python src/cli.py skip broken.pdf
+  python src/cli.py unskip broken.pdf
   python src/cli.py status
         """
     )
@@ -2205,6 +2418,10 @@ def main():
     ingest_parser = subparsers.add_parser('ingest', help='Ingest documents')
     ingest_parser.add_argument('--full', '-f', action='store_true',
                                help='Full re-ingest (not incremental)')
+    ingest_parser.add_argument('--retry-failed', action='store_true',
+                               help='Retry documents that failed in a previous ingest run')
+    ingest_parser.add_argument('--file', metavar='NAME',
+                               help='Process only files whose name contains NAME (case-insensitive)')
 
     compile_parser = subparsers.add_parser('compile', help='Compile wiki')
     compile_parser.add_argument('--full', '-f', action='store_true',
@@ -2428,6 +2645,10 @@ Environment:
         '--skip-graphify-check', action='store_true',
         help='Skip the knowledge graph existence check (not recommended)'
     )
+    compile_llm_parser.add_argument(
+        '--file', metavar='NAME',
+        help='Compile only documents whose filename contains NAME (case-insensitive)'
+    )
 
     # ------------------------------------------------------------------
     # deploy: sync wiki/ to cloud server
@@ -2466,6 +2687,48 @@ Environment variables (alternative to flags):
                                help='Skip remote conflict check and overwrite without prompting')
     deploy_parser.add_argument('--yes', '-y', action='store_true',
                                help='Auto-confirm conflict prompt (useful in CI)')
+
+    # ------------------------------------------------------------------
+    # skip / unskip: permanently exclude a document from the pipeline
+    # ------------------------------------------------------------------
+    skip_parser = subparsers.add_parser(
+        'skip',
+        help='Permanently skip a document so ingest/compile/graphify ignore it',
+        description=(
+            'Mark a document as skipped in both the ContentRegistry and IndexManager. '
+            'Useful for problematic files (corrupt PDFs, irrelevant docs) you never '
+            'want to process. Undo with: kb unskip <name>'
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  kb skip broken-scan.pdf          # skip by partial filename match
+  kb skip "chapter 3"              # skip all docs whose name contains "chapter 3"
+        """
+    )
+    skip_parser.add_argument(
+        'file',
+        help='Filename fragment to match (case-insensitive, partial match)'
+    )
+
+    unskip_parser = subparsers.add_parser(
+        'unskip',
+        help='Restore a previously skipped document to the pipeline',
+        description=(
+            'Reset all SKIPPED stages back to PENDING and restore the IndexManager '
+            'status so the document will be processed on the next ingest/compile run.'
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  kb unskip broken-scan.pdf        # restore the skipped document
+  kb ingest --retry-failed         # then re-process it
+        """
+    )
+    unskip_parser.add_argument(
+        'file',
+        help='Filename fragment to match (case-insensitive, partial match)'
+    )
 
     # ------------------------------------------------------------------
     # clean: prune stale index entries
@@ -2550,6 +2813,8 @@ Examples:
         'lint': cmd_lint,
         'search': cmd_search,
         'clean': cmd_clean,
+        'skip': cmd_skip,
+        'unskip': cmd_unskip,
     }
     
     command_func = commands.get(args.command)

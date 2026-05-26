@@ -271,15 +271,21 @@ kb fetch https://www.youtube.com/watch?v=...
 | `init <path>` | Initialize a new knowledge base |
 | `add <files...>` | Add files with automatic pipeline (ingest→compile→graphify) |
 | `ingest` | Extract and index documents from `raw/` |
+| `ingest --retry-failed` | Re-process documents that errored in a previous run |
+| `ingest --file <name>` | Process only documents whose filename contains `<name>` |
 | `compile` | Regex-based wiki compilation (no API key) |
 | `compile-llm` | LLM-driven wiki compilation (requires any LLM API key) |
+| `compile-llm --retry-failed` | Retry documents that failed LLM compilation |
+| `compile-llm --file <name>` | Compile only documents whose filename contains `<name>` |
 | `graphify` | Build knowledge graph from compiled wiki articles |
+| `skip <name>` | Permanently skip a document (won't be processed again) |
+| `unskip <name>` | Restore a skipped document to the pipeline |
 | `fetch <source>` | Fetch from web/GitHub/video via Skill Seekers |
 | `fetch-list` | List previously fetched skills |
 | `search <query>` | Keyword search against local index |
 | `lint` | Static wiki health check (orphan links, missing sections, stale articles) |
 | `clean` | Remove stale index entries for deleted source files |
-| `status` | Show document counts and LLM compile coverage |
+| `status` | Show document counts and pipeline progress with status bars |
 | `deploy` | Sync wiki to cloud server via rsync/SSH |
 
 ## Directory Layout After Setup
