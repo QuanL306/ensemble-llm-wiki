@@ -33,6 +33,7 @@ class IndexManager:
 
         os.makedirs(self.meta_dir, exist_ok=True)
         self.index = self._load_index()
+        self._migrate_index()
 
     def _load_index(self) -> Dict[str, Any]:
         """Load index from disk, with fallback to backup on corruption."""
@@ -69,6 +70,18 @@ class IndexManager:
             "last_updated": datetime.now().isoformat(),
             "files": {}
         }
+
+    def _migrate_index(self):
+        """Apply forward migrations to the loaded index."""
+        # Migration: strip structured_text from extracted_metadata (deprecated, was very large)
+        changed = False
+        for finfo in self.index.get("files", {}).values():
+            meta = finfo.get("extracted_metadata", {})
+            if "structured_text" in meta:
+                del meta["structured_text"]
+                changed = True
+        if changed:
+            self.save_index()
 
     def save_index(self):
         """Persist index to disk with backup. Stamps schema_version."""

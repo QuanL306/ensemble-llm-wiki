@@ -371,14 +371,22 @@ class KnowledgeBaseMCPServer:
                 file_path = kb_path / "wiki" / "_index.md"
             elif rest.startswith("articles/"):
                 name = rest[9:]
-                if ".." in name or "/" in name or "\\" in name:
-                    raise ValueError(f"Invalid resource name: {uri}")
-                file_path = kb_path / "wiki" / "_articles" / f"{name}.md"
+                # Validate name is safe before constructing the path
+                candidate = (kb_path / "wiki" / "_articles" / f"{name}.md").resolve()
+                try:
+                    candidate.relative_to(kb_path.resolve())
+                except ValueError:
+                    raise ValueError(f"Path escape attempt in resource name: {uri}")
+                file_path = candidate
             elif rest.startswith("concepts/"):
                 name = rest[9:]
-                if ".." in name or "/" in name or "\\" in name:
-                    raise ValueError(f"Invalid resource name: {uri}")
-                file_path = kb_path / "wiki" / "_concepts" / f"{name}.md"
+                # Validate name is safe before constructing the path
+                candidate = (kb_path / "wiki" / "_concepts" / f"{name}.md").resolve()
+                try:
+                    candidate.relative_to(kb_path.resolve())
+                except ValueError:
+                    raise ValueError(f"Path escape attempt in resource name: {uri}")
+                file_path = candidate
             else:
                 raise ValueError(f"Unknown resource: {uri}")
 
@@ -842,8 +850,12 @@ class KnowledgeBaseMCPServer:
                     wiki_path = file_info.get("wiki_path", "")
                     if wiki_path:
                         candidate = (kb_path / wiki_path).resolve()
-                        kb_root = kb_path.resolve()
-                        if str(candidate).startswith(str(kb_root) + "/") and candidate.exists():
+                        try:
+                            candidate.relative_to(kb_path.resolve())
+                            containment_ok = True
+                        except ValueError:
+                            containment_ok = False
+                        if containment_ok and candidate.exists():
                             content = candidate.read_text(encoding='utf-8')
                             break
 

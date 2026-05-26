@@ -8,10 +8,24 @@ import os
 import re
 import sys
 import json
+import shlex
 import argparse
+import re as _re
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Tuple
+
+# ── Input validation for deploy args (C3) ────────────────────────
+_SAFE_ID_RE = _re.compile(r'^[A-Za-z0-9._\-]+$')
+
+
+def _validate_deploy_arg(name: str, value: str):
+    """Reject deploy arguments containing shell-unsafe characters."""
+    if not value:
+        return
+    if not _SAFE_ID_RE.match(value):
+        print(f"❌ Invalid {name} '{value}': only letters, digits, dots, hyphens, underscores allowed")
+        sys.exit(1)
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -29,7 +43,7 @@ from core.registry import detect_pipeline, detect_file_type
 def load_config(kb_path: str) -> dict:
     """Load knowledge base configuration"""
     config_file = os.path.join(kb_path, ".kbaconfig")
-    
+
     if os.path.exists(config_file):
         try:
             import yaml
@@ -37,8 +51,24 @@ def load_config(kb_path: str) -> dict:
                 return yaml.safe_load(f) or {}
         except Exception:
             pass
-    
+
     return {"name": "My Knowledge Base", "version": "1.0", "path": kb_path}
+
+
+_VALID_PIPELINES = {"graphify-first", "compile-first", "none"}
+
+
+def _validate_config(config: dict) -> dict:
+    """Warn and correct invalid pipeline.default in .kbaconfig (M13).
+
+    Returns config (possibly mutated in-memory) so callers can use it directly.
+    """
+    pipeline_default = config.get("pipeline", {}).get("default", "graphify-first")
+    if pipeline_default not in _VALID_PIPELINES:
+        print(f"⚠️  Warning: .kbaconfig pipeline.default='{pipeline_default}' is not valid. "
+              f"Valid values: {sorted(_VALID_PIPELINES)}. Using 'graphify-first'.")
+        config.setdefault("pipeline", {})["default"] = "graphify-first"
+    return config
 
 
 def save_config(kb_path: str, config: dict):
@@ -84,6 +114,13 @@ def cmd_init(args):
         folder_path = os.path.join(os.path.expanduser(kb_root), kb_name)
         folder_path = os.path.abspath(folder_path)
     kb_name = args.name or os.path.basename(folder_path)
+
+    # Guard against silently overwriting an existing KB (M8)
+    existing_config = os.path.join(folder_path, ".kbaconfig")
+    if os.path.exists(existing_config) and not getattr(args, 'force', False):
+        print(f"❌  Knowledge base already exists at: {folder_path}")
+        print(f"   Use --force to reinitialize (WARNING: overwrites .kbaconfig)")
+        return
     
     print(f"🚀 Initializing Knowledge Base: {kb_name}")
     print(f"📁 Path: {folder_path}")
@@ -189,7 +226,7 @@ def cmd_ingest(args):
         print("   Please run: python src/cli.py init <folder_path>")
         return
 
-    config = load_config(kb_path)
+    config = _validate_config(load_config(kb_path))
     print(f"📚 Knowledge Base: {config.get('name', 'Unknown')}")
     print(f"📁 Path: {kb_path}")
 
@@ -479,7 +516,7 @@ def cmd_add(args):
         return
 
     kb = KnowledgeBase(kb_path)
-    config = load_config(kb_path)
+    config = _validate_config(load_config(kb_path))
     print(f"📚 {config.get('name', kb_path)}")
 
     sources = args.sources
@@ -653,6 +690,28 @@ def _estimate_cost(files: list, model: str) -> float:
     else:
         input_price = 1.50  # conservative default
 
+    # Output pricing per 1M tokens (typically 3-5x input price)
+    if "kimi" in model_lower or "moonshot" in model_lower:
+        output_price = 6.60
+    elif "deepseek" in model_lower:
+        output_price = 1.10
+    elif "glm" in model_lower or "zhipu" in model_lower:
+        output_price = 1.00
+    elif "opus" in model_lower:
+        output_price = 75.0
+    elif "sonnet" in model_lower:
+        output_price = 15.0
+    elif "haiku" in model_lower:
+        output_price = 4.0
+    elif "gpt-4o" in model_lower:
+        output_price = 10.0
+    elif "gemini" in model_lower:
+        output_price = 0.40
+    elif "minimax" in model_lower or "abab" in model_lower:
+        output_price = 0.50
+    else:
+        output_price = 4.0  # conservative default
+
     total_words = sum(
         f.get("extracted_metadata", {}).get("word_count", 5_000) for f in files
     )
@@ -660,7 +719,7 @@ def _estimate_cost(files: list, model: str) -> float:
     # Output: ~3000 tokens per doc (post-fix)
     input_tokens = total_words * 0.33   # ~0.33 tokens/word avg after truncation
     output_tokens = len(files) * 3_000
-    return (input_tokens * input_price + output_tokens * input_price) / 1_000_000
+    return (input_tokens * input_price + output_tokens * output_price) / 1_000_000
 
 
 def _clean_extracted_text(raw: str) -> str:
@@ -675,7 +734,10 @@ def _clean_extracted_text(raw: str) -> str:
     marker = "\n## Structured Text\n"
     idx = raw.find(marker)
     if idx == -1:
-        # File is raw markdown or plain text with no structured header — use as-is
+        # Strip any residual header block (e.g. "# Document Analysis\n## Basic Information\n...")
+        header_end = re.search(r'\n## (?!Document Analysis|Basic Information|Structured Text)', raw)
+        if header_end and header_end.start() < 500:
+            return raw[header_end.start():].lstrip()
         return raw
     return raw[idx + len(marker):]
 
@@ -690,6 +752,7 @@ def _split_at_boundaries(text: str, boundaries: list) -> list:
     """
     CHUNK_MIN  = 150
     CHUNK_SIZE = 600
+    assert CHUNK_SIZE > CHUNK_MIN, f"CHUNK_SIZE ({CHUNK_SIZE}) must be > CHUNK_MIN ({CHUNK_MIN})"
 
     all_bounds = boundaries + [len(text)]
     chunks = []
@@ -1132,12 +1195,16 @@ def _compile_document(backend, model: str, file_info: dict, kb_path: str) -> Opt
     original_word_count = meta.get("word_count", "unknown")
     truncated = len(text) > MAX_CHARS
     if truncated:
+        # Sample beginning, middle, and end equally (M15)
+        chunk = 45_000  # ~45K chars each ≈ 135K total
+        mid_start = max(0, len(text) // 2 - chunk // 2)
         text = (
-            text[:120_000]
-            + "\n\n[NOTE: source text truncated — middle section omitted. "
-            + f"Showing first ~{120_000//6} and last ~{20_000//6} words of "
-            + f"~{original_word_count} total.]\n\n"
-            + text[-20_000:]
+            text[:chunk]
+            + f"\n\n[NOTE: source text too long (~{original_word_count:,} words). "
+            f"Sampling beginning, middle, and end. Middle section starts ~{mid_start//6:,} words in.]\n\n"
+            + text[mid_start: mid_start + chunk]
+            + "\n\n[...middle section end...]\n\n"
+            + text[-chunk:]
         )
 
     # Use the actual word count of what we send, not the original full count
@@ -1318,6 +1385,15 @@ def cmd_compile_llm(args):
         try:
             pid = int(read_text(lock_file).strip())
             os.kill(pid, 0)   # raises if PID doesn't exist
+            # PID exists — verify it's actually a compile-llm process (H3)
+            import subprocess as _sp
+            try:
+                result = _sp.run(["ps", "-p", str(pid), "-o", "args="],
+                                 capture_output=True, text=True, timeout=3)
+                if "cli.py" not in result.stdout and "kb" not in result.stdout:
+                    raise ProcessLookupError("PID reused by unrelated process")
+            except (FileNotFoundError, _sp.TimeoutExpired):
+                pass  # ps not available, fall back to PID-only check
             print(f"❌  Another compile-llm is running (PID {pid}).")
             print(f"   If stale, delete: {lock_file}")
             return
@@ -1339,7 +1415,7 @@ def cmd_compile_llm(args):
 
 def _cmd_compile_llm_inner(args, kb_path: str):
     """Body of cmd_compile_llm, extracted for lock-file wrapping."""
-    config = load_config(kb_path)
+    config = _validate_config(load_config(kb_path))
     articles_dir = os.path.join(kb_path, "wiki", "_articles")
     concepts_dir = os.path.join(kb_path, "wiki", "_concepts")
     ensure_dir(articles_dir)
@@ -1373,11 +1449,13 @@ def _cmd_compile_llm_inner(args, kb_path: str):
 
             if args.full:
                 pending = completed
-                # Clear all failure records when doing a full recompile
+                # Clear all previous compile results so this run starts fresh
                 for f in completed:
                     fid = indexer.generate_file_id(f["path"])
-                    indexer.index["files"][fid].pop("compile_failed_at", None)
-                    indexer.index["files"][fid].pop("compile_error", None)
+                    entry = indexer.index["files"].get(fid, {})
+                    for key in ("compile_failed_at", "compile_error", "llm_compiled_at",
+                                "retrieval_queries", "llm_metadata", "chunks"):
+                        entry.pop(key, None)
                 indexer.save_index()
             elif retry_failed:
                 # Retry previously failed docs + still-uncompiled docs
@@ -1434,7 +1512,7 @@ def _cmd_compile_llm_inner(args, kb_path: str):
 
             if pending:
                 est = _estimate_cost(pending, model)
-                print(f"   Est. cost       : ~${est:.2f}")
+                print(f"   Est. cost       : ~${est:.2f}")  # always shown (M11)
 
                 if not args.yes:
                     if input("\n   Proceed? [y/N] ").strip().lower() != "y":
@@ -1459,11 +1537,24 @@ def _cmd_compile_llm_inner(args, kb_path: str):
 
                         if error:
                             print(f"\n   ❌ {error[:120]}")
-                            indexer.index["files"][file_id]["compile_failed_at"] = \
-                                datetime.now().isoformat()
-                            indexer.index["files"][file_id]["compile_error"] = \
-                                error[:200]
-                            indexer.save_index()
+                            # Only mark permanently failed for non-transient errors.
+                            # Transient errors (rate limits, timeouts, network) leave
+                            # the doc as uncompiled so the next normal run retries it.
+                            is_transient = (
+                                "transient" in error.lower()
+                                or "429" in error
+                                or "timeout" in error.lower()
+                                or "rate" in error.lower()
+                                or "network" in error.lower()
+                            )
+                            if not is_transient:
+                                indexer.index["files"][file_id]["compile_failed_at"] = \
+                                    datetime.now().isoformat()
+                                indexer.index["files"][file_id]["compile_error"] = \
+                                    error[:200]
+                                indexer.save_index()
+                            else:
+                                print(f"   ⚡ Transient error — will retry on next run")
                             failed_count += 1
                             continue
 
@@ -1627,6 +1718,11 @@ def cmd_deploy(args):
         print("   This is the user_id folder on the server, e.g. 'alice' or 'user-123'")
         return
 
+    # Validate all shell-interpolated arguments to prevent injection (C3)
+    _validate_deploy_arg("host", host)
+    _validate_deploy_arg("remote-user", remote_uid)
+    _validate_deploy_arg("kb-id", kb_id)
+
     dry_run = getattr(args, 'dry_run', False)
     quiet   = getattr(args, 'quiet', False)
     force   = getattr(args, 'force', False)
@@ -1649,7 +1745,7 @@ def cmd_deploy(args):
     if dry_run:
         rsync_cmd.append("--dry-run")
     if key_path:
-        rsync_cmd += ["-e", f"ssh -i {key_path}"]
+        rsync_cmd += ["-e", f"ssh -i {shlex.quote(key_path)}"]
 
     # ── Ensure remote directory exists (skip for dry-run) ─────────────────
     if not dry_run:
@@ -2095,10 +2191,22 @@ def cmd_clean(args):
         print("  Run without --dry-run to apply.")
         return
 
-    # Save updated index
+    # Save updated index atomically (H6)
     try:
-        with open(index_file, 'w', encoding='utf-8') as f:
-            _json.dump(index_data, f, indent=2, ensure_ascii=False)
+        import tempfile as _tempfile2
+        tmp_fd, tmp_path = _tempfile2.mkstemp(
+            dir=os.path.dirname(index_file), suffix=".tmp"
+        )
+        try:
+            with os.fdopen(tmp_fd, 'w', encoding='utf-8') as f:
+                _json.dump(index_data, f, indent=2, ensure_ascii=False)
+            os.replace(tmp_path, index_file)
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
     except Exception as e:
         print(f"❌ Failed to save index: {e}")
         return
@@ -2176,6 +2284,10 @@ def cmd_skip(args):
     if fid in indexer.index.get("files", {}):
         indexer.index["files"][fid]["status"] = "skipped"
         indexer.save_index()
+    else:
+        print(f"   ⚠️  Note: document not found in IndexManager (file_index.json).")
+        print(f"      Only ContentRegistry was updated. Run 'kb ingest' if the file was")
+        print(f"      recently added, then run 'kb skip {args.file}' again.")
 
     print(f"⏭️  Skipped: {name}")
     if changed_stages:
@@ -2414,6 +2526,8 @@ def main():
     init_parser = subparsers.add_parser('init', help='Initialize knowledge base')
     init_parser.add_argument('folder_path', nargs='?', help='Knowledge base directory path (uses $KB_ROOT/{name} if omitted)')
     init_parser.add_argument('--name', '-n', help='Knowledge base name')
+    init_parser.add_argument('--force', action='store_true',
+                             help='Overwrite existing .kbaconfig (WARNING: destroys custom config)')
 
     ingest_parser = subparsers.add_parser('ingest', help='Ingest documents')
     ingest_parser.add_argument('--full', '-f', action='store_true',

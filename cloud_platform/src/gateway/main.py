@@ -44,8 +44,18 @@ JWT_ALGORITHM = "HS256"
 if not JWT_SECRET or JWT_SECRET in ("your-secret-key", "changeme", "secret"):
     raise RuntimeError("JWT_SECRET env var is not set or uses an insecure default — set a strong random value")
 
-# CORS — set CORS_ORIGINS to a comma-separated list of allowed origins (e.g. "https://app.example.com")
+# CORS — set CORS_ORIGINS to a comma-separated list of allowed origins.
+# Valid example: CORS_ORIGINS=https://app.example.com,https://admin.example.com
+# If not set, defaults to [] (no cross-origin access — safe default).
+# If set to "*", a CRITICAL warning is logged and it is treated as [] (blocked).
 _cors_env = os.getenv("CORS_ORIGINS", "")
+if _cors_env.strip() == "*":
+    log.critical(
+        "CORS_ORIGINS is set to '*' (wildcard) — this is insecure and NOT allowed. "
+        "Set CORS_ORIGINS to a comma-separated list of explicit origins instead. "
+        "Treating as empty (all cross-origin requests blocked)."
+    )
+    _cors_env = ""
 CORS_ORIGINS: list[str] = [o.strip() for o in _cors_env.split(",") if o.strip()]
 
 # Rate limiting
@@ -59,6 +69,9 @@ redis_client: Optional[redis.Redis] = None
 
 # Upstream MCP server URL
 MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://localhost:8001")
+
+# Shared secret for gateway → MCP server authentication (C1)
+INTERNAL_SECRET = os.getenv("INTERNAL_SECRET", "")
 
 # Shared HTTP client — reuses connections across proxy requests
 _http_client: Optional[httpx.AsyncClient] = None
@@ -256,8 +269,9 @@ async def verify_jwt_token(credentials: HTTPAuthorizationCredentials = Depends(s
                     raise HTTPException(status_code=401, detail="Token has been revoked")
             except HTTPException:
                 raise
-            except Exception:
-                pass  # Redis unavailable — fail open, token assumed valid
+            except Exception as exc:
+                log.error("Redis unavailable during JWT revocation check: %s", exc)
+                raise HTTPException(status_code=503, detail="Authentication service temporarily unavailable")
         return payload
     except HTTPException:
         raise
@@ -429,7 +443,7 @@ async def register(request: Request, data: UserRegister):
         if _http_client:
             await _http_client.post(
                 f"{MCP_SERVER_URL}/api/v1/knowledge-bases",
-                headers={"X-User-ID": user_id},
+                headers={"X-User-ID": user_id, "X-Internal-Token": INTERNAL_SECRET},
                 json={"kb_id": "default"},
                 timeout=10.0,
             )
@@ -483,8 +497,9 @@ async def refresh_token(request: Request):
                     raise HTTPException(status_code=401, detail="Refresh token has been revoked")
             except HTTPException:
                 raise
-            except Exception:
-                pass  # Redis unavailable — fail open
+            except Exception as exc:
+                log.error("Redis unavailable during refresh token revocation check: %s", exc)
+                raise HTTPException(status_code=503, detail="Authentication service temporarily unavailable")
 
         user_id = payload["sub"]
         email = payload.get("email", "")
@@ -658,12 +673,13 @@ async def _proxy_to_mcp(request: Request, path: str, method: str) -> Response:
         raise HTTPException(status_code=429, detail="Quota exceeded")
 
     forwarded_headers = {
-        "X-User-ID":     user_id,
-        "X-KB-ID":       kb_id,
-        "X-KB-Owner-ID": kb_owner_id,
-        "X-API-Key-ID":  key_info["key_id"],
-        "X-Permissions": ",".join(key_info["permissions"]),
-        "X-Request-ID":  req_id,
+        "X-User-ID":        user_id,
+        "X-KB-ID":          kb_id,
+        "X-KB-Owner-ID":    kb_owner_id,
+        "X-API-Key-ID":     key_info["key_id"],
+        "X-Permissions":    ",".join(key_info["permissions"]),
+        "X-Request-ID":     req_id,
+        "X-Internal-Token": INTERNAL_SECRET,
     }
 
     client = _http_client
@@ -736,21 +752,43 @@ async def _record_usage(api_key: str, user_id: str, path: str, request: Request)
     Persist usage to Redis for the /api/v1/usage/stats endpoint.
     Stores a JSON string so it's machine-parseable if ever replayed.
     Keeps the last 10 000 entries (LPUSH + LTRIM).
+    On failure, logs an error-level alert and appends to a local fallback file
+    so usage records are not silently lost (M4).
     """
+    from pathlib import Path as _Path
+    from datetime import datetime as _datetime
+
+    req_id = getattr(getattr(request, "state", None), "req_id", "-")
+    entry = json.dumps({
+        "req_id":     req_id,
+        "key_prefix": redact_key(api_key),
+        "user_id":    user_id,
+        "path":       path,
+        "ip":         request.client.host if request.client else "?",
+        "ts":         time.time(),
+    }, ensure_ascii=False)
     try:
-        req_id = getattr(getattr(request, "state", None), "req_id", "-")
-        entry = json.dumps({
-            "req_id":     req_id,
-            "key_prefix": redact_key(api_key),
-            "user_id":    user_id,
-            "path":       path,
-            "ip":         request.client.host if request.client else "?",
-            "ts":         time.time(),
-        }, ensure_ascii=False)
         await redis_client.lpush("usage_logs", entry)
         await redis_client.ltrim("usage_logs", 0, 9_999)
     except Exception as exc:
-        log.warning("_record_usage failed: %s", exc)
+        token_count = 0  # gateway doesn't have token count at this layer
+        timestamp = time.time()
+        log.error(
+            "USAGE_RECORD_FAILURE user=%s tokens=%s ts=%s err=%s",
+            user_id, token_count, timestamp, exc
+        )
+        # Fallback: append to a local file so usage isn't lost entirely
+        try:
+            fallback_path = _Path("/data/usage_fallback.log")
+            fallback_path.parent.mkdir(parents=True, exist_ok=True)
+            with fallback_path.open("a") as f:
+                f.write(json.dumps({
+                    "user": user_id, "tokens": token_count,
+                    "ts": str(_datetime.utcnow()), "err": str(exc),
+                    "entry": entry,
+                }) + "\n")
+        except Exception:
+            pass  # truly last resort
 
 
 # ============ Usage Stats ============
@@ -824,7 +862,7 @@ async def add_kb_member(
     try:
         resp = await _http_client.post(
             f"{MCP_SERVER_URL}/api/v1/knowledge-bases/members",
-            headers={"X-User-ID": owner_id, "X-KB-ID": kb_id},
+            headers={"X-User-ID": owner_id, "X-KB-ID": kb_id, "X-Internal-Token": INTERNAL_SECRET},
             json={"member_user_id": member_user_id, "role": data.role},
             timeout=10.0,
         )
@@ -874,7 +912,7 @@ async def remove_kb_member(
     try:
         resp = await _http_client.delete(
             f"{MCP_SERVER_URL}/api/v1/knowledge-bases/members/{member_user_id}",
-            headers={"X-User-ID": owner_id, "X-KB-ID": kb_id},
+            headers={"X-User-ID": owner_id, "X-KB-ID": kb_id, "X-Internal-Token": INTERNAL_SECRET},
             timeout=10.0,
         )
     except Exception as exc:

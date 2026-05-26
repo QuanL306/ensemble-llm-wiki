@@ -19,11 +19,23 @@ from __future__ import annotations
 
 import json
 import os
+import re as _re
 import sys
 import time
 import urllib.error
 import urllib.request
 from typing import Any, Dict, List, Optional
+
+# ── Code-fence stripper (M5) ─────────────────────────────────────
+_FENCE_RE = _re.compile(r'^```[a-zA-Z]*\s*\n?(.*?)\n?```\s*$', _re.DOTALL)
+
+
+def _strip_code_fence(text: str) -> str:
+    """Strip a single ``` ... ``` fence from an LLM response, if present."""
+    m = _FENCE_RE.match(text.strip())
+    if m:
+        return m.group(1).strip()
+    return text
 
 # ── Backend definitions ──────────────────────────────────────────
 
@@ -31,7 +43,7 @@ BACKENDS: Dict[str, Dict[str, Any]] = {
     "claude": {
         "base_url": "https://api.anthropic.com/v1/messages",
         "api_key_env": "ANTHROPIC_API_KEY",
-        "model": "claude-sonnet-4-6",
+        "model": "claude-3-5-sonnet-20241022",
         "provider": "anthropic",
     },
     "openai": {
@@ -43,13 +55,13 @@ BACKENDS: Dict[str, Dict[str, Any]] = {
     "deepseek": {
         "base_url": "https://api.deepseek.com/v1/chat/completions",
         "api_key_env": "DEEPSEEK_API_KEY",
-        "model": "deepseek-v4-flash",
+        "model": "deepseek-chat",
         "provider": "openai-compat",
     },
     "kimi": {
         "base_url": "https://api.moonshot.cn/v1/chat/completions",
         "api_key_env": "MOONSHOT_API_KEY",
-        "model": "kimi-k2.6",
+        "model": "moonshot-v1-8k",
         "provider": "openai-compat",
         "fixed_temperature": 0.6,
         "extra_body": {"thinking": {"type": "disabled"}},
@@ -57,7 +69,7 @@ BACKENDS: Dict[str, Dict[str, Any]] = {
     "zhipu": {
         "base_url": "https://open.bigmodel.cn/api/paas/v4/chat/completions",
         "api_key_env": "ZHIPU_API_KEY",
-        "model": "glm-5.1",
+        "model": "glm-4",
         "provider": "openai-compat",
     },
     "minimax": {
@@ -67,9 +79,9 @@ BACKENDS: Dict[str, Dict[str, Any]] = {
         "provider": "minimax",
     },
     "gemini": {
-        "base_url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent",
         "api_key_env": "GEMINI_API_KEY",
-        "model": "gemini-2.0-flash",
+        "model": "gemini-1.5-flash",
         "provider": "gemini",
     },
 }
@@ -224,8 +236,12 @@ def chat(
         ) from e
     except (urllib.error.URLError, OSError) as e:
         raise LLMTransientError(f"[{backend}] Network error after retries: {e}") from e
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
+        # These are structural / client-side errors — retrying won't help
+        raise LLMPermanentError(f"[{backend}] Response parse error: {e}") from e
     except Exception as e:
-        raise LLMTransientError(f"[{backend}] LLM call failed: {e}") from e
+        # Unknown errors — treat as transient so the caller can retry once
+        raise LLMTransientError(f"[{backend}] Unexpected error: {e}") from e
 
 
 # ── Retry helper ─────────────────────────────────────────────────
@@ -578,12 +594,7 @@ Respond ONLY with this JSON structure:
                   temperature=0.2, max_tokens=1024)
 
     try:
-        # Strip markdown fences if present
-        content = result["content"].strip()
-        if content.startswith("```"):
-            content = content.split("\n", 1)[-1]
-            if content.endswith("```"):
-                content = content[:-3]
+        content = _strip_code_fence(result["content"])
         data = json.loads(content)
         return {**data, "_backend": result["backend"],
                 "_tokens": {"in": result["input_tokens"], "out": result["output_tokens"]}}
@@ -632,11 +643,7 @@ Respond ONLY with:
                   temperature=0.2, max_tokens=2048)
 
     try:
-        content = result["content"].strip()
-        if content.startswith("```"):
-            content = content.split("\n", 1)[-1]
-            if content.endswith("```"):
-                content = content[:-3]
+        content = _strip_code_fence(result["content"])
         return json.loads(content)
     except json.JSONDecodeError:
         print(f"[llm] JSON parse failed for merge: {result['content'][:200]}",

@@ -27,6 +27,7 @@ services:
       - MCP_SERVER_URL=http://mcp-server:8001
       - RATE_LIMIT_DEFAULT=${RATE_LIMIT_DEFAULT:-100}
       - QUOTA_DEFAULT=${QUOTA_DEFAULT:-10000}
+      - INTERNAL_SECRET=${INTERNAL_SECRET}
     depends_on:
       redis:
         condition: service_healthy
@@ -42,9 +43,10 @@ services:
       dockerfile: deploy/Dockerfile.mcp
     restart: unless-stopped
     ports:
-      - "8001:8001"
+      - "127.0.0.1:8001:8001"
     environment:
       - KB_BASE_PATH=/data/knowledge-bases
+      - INTERNAL_SECRET=${INTERNAL_SECRET}
     volumes:
       - kb_data:/data/knowledge-bases
     healthcheck:

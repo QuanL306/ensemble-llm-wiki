@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import unquote
 
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -30,6 +30,18 @@ from log import setup_logging, get_logger
 
 setup_logging("mcp_server")
 log = get_logger(__name__)
+
+# Shared-secret authentication between gateway and MCP server (C1)
+INTERNAL_SECRET = os.environ.get("INTERNAL_SECRET", "")
+if not INTERNAL_SECRET:
+    log.warning("INTERNAL_SECRET not set — MCP server is unauthenticated")
+
+
+def _verify_internal(request: Request):
+    """Dependency: reject requests that don't carry the correct internal token."""
+    if INTERNAL_SECRET and request.headers.get("X-Internal-Token") != INTERNAL_SECRET:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
 
 # Add builder source to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', 'builder', 'src'))
@@ -71,7 +83,8 @@ class _BodySizeLimitMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
-app = FastAPI(title="Knowledge Base MCP HTTP Server", version="1.0.0")
+app = FastAPI(title="Knowledge Base MCP HTTP Server", version="1.0.0",
+              dependencies=[Depends(_verify_internal)])
 
 # CORS — set CORS_ORIGINS to a comma-separated list (e.g. "https://app.example.com")
 # Default: empty (no cross-origin access). Set explicitly for production.
@@ -135,6 +148,9 @@ _embed_model_lock = threading.Lock()
 
 # Per-(user_id, kb_id) embedding cache with mtime invalidation
 _EMBEDDINGS_CACHE_MAX = 50
+# Race analysis (H8): _embeddings_cache is mutated from async handlers.
+# The race is benign — worst case a duplicate load occurs, no corruption,
+# because every mutation is a single atomic dict operation (no iteration).
 _embeddings_cache: OrderedDict = OrderedDict()   # (user_id, kb_id) -> {"mtime": float, "vectors": dict}
 
 
@@ -232,6 +248,12 @@ class KnowledgeBaseManager:
 
         Results are cached per requester for _SHARED_KBS_TTL seconds to avoid
         a full filesystem scan on every list call.
+
+        # TODO(perf): replace with Redis inverted index (M10):
+        #   key "kb_members:{owner_id}:{kb_id}" → set of member user_ids
+        #   key "user_shared_kbs:{user_id}" → set of "owner_id/kb_id" strings
+        # Update both on add_kb_member / remove_kb_member.
+        # For now the 60-second TTL cache limits filesystem scan frequency.
         """
         cached = self._shared_kbs_cache.get(requester_id)
         if cached and (time.time() - cached[0]) < _SHARED_KBS_TTL:
@@ -329,6 +351,10 @@ class KnowledgeBaseManager:
     
     # Per-KB index cache: (user_id, kb_id) -> {"mtime": float, "data": dict}
     _INDEX_CACHE_MAX = 100
+    # Race analysis (H8): _index_cache is a class-level OrderedDict mutated from
+    # async handlers. The race is benign — worst case a duplicate load occurs,
+    # no corruption, because every mutation is a single atomic dict operation
+    # (no cross-coroutine iteration of the dict itself).
     _index_cache: OrderedDict = OrderedDict()
 
     def _load_index_cached(self, kb_path: Path, user_id: str, kb_id: str) -> Optional[dict]:
@@ -425,8 +451,11 @@ class KnowledgeBaseManager:
                     if wiki_path:
                         candidate = (kb_path / wiki_path).resolve()
                         kb_root = kb_path.resolve()
-                        if str(candidate).startswith(str(kb_root) + "/"):
+                        try:
+                            candidate.relative_to(kb_root)
                             possible_paths.insert(0, candidate)
+                        except ValueError:
+                            pass  # path traversal attempt — skip silently
         
         for path in possible_paths:
             if path.exists():
@@ -999,7 +1028,7 @@ async def mcp_call_tool(body: ToolCallRequest, request: Request):
             if syntheses_dir.exists():
                 for syn_file in sorted(syntheses_dir.glob("*.md")):
                     try:
-                        raw = syn_file.read_text(encoding="utf-8")
+                        raw = syn_file.read_text(encoding="utf-8", errors="replace")
                         display_name = ""
                         for line in raw.splitlines():
                             stripped = line.strip()
@@ -1211,7 +1240,7 @@ async def mcp_call_tool(body: ToolCallRequest, request: Request):
                             )
                             if article_path.exists():
                                 try:
-                                    article_text = article_path.read_text(encoding="utf-8")
+                                    article_text = article_path.read_text(encoding="utf-8", errors="replace")
                                     m = re.search(
                                         r'## Summary\n(.*?)(?=\n## |\Z)',
                                         article_text, re.DOTALL
@@ -1320,7 +1349,7 @@ async def mcp_call_tool(body: ToolCallRequest, request: Request):
                       "isError": True
                   }
 
-              existing = target.read_text(encoding="utf-8")
+              existing = target.read_text(encoding="utf-8", errors="replace")
               timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
               entry = f"\n### {timestamp}\n\n{note}\n"
               section_heading = f"## {section}"

@@ -39,6 +39,24 @@ _SCRUB_PATTERNS = [
     (re.compile(r'\bghp_[A-Za-z0-9]{36}\b'), r'ghp_[REDACTED]'),
     # Bearer tokens in Authorization headers
     (re.compile(r'(?i)(Bearer\s+)[A-Za-z0-9\-._~+/]{20,}'), r'\1[REDACTED]'),
+    # Google API keys
+    (re.compile(r'AIza[0-9A-Za-z\-_]{35}'), '[REDACTED]'),
+    # Slack tokens
+    (re.compile(r'xox[bporas]-[0-9A-Za-z\-]+'), '[REDACTED]'),
+    # JWT tokens (header.payload.signature)
+    (re.compile(r'eyJ[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+'), '[REDACTED]'),
+    # Database connection strings
+    (re.compile(
+        r'(postgres|postgresql|mysql|mongodb|redis)://[^\s<>"\']+:[^\s<>"\']+@[^\s<>"\',]+'
+    ), '[REDACTED]'),
+    # PEM private key blocks — redact the entire block
+    (re.compile(
+        r'-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----'
+    ), '[REDACTED]'),
+    # Generic secret/token patterns
+    (re.compile(
+        r'(?i)(secret|token|apikey|api_key)\s*[=:]\s*["\']?[A-Za-z0-9\-_]{16,}["\']?'
+    ), r'[REDACTED]'),
 ]
 
 

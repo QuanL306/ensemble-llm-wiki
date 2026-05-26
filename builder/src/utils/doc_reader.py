@@ -165,7 +165,18 @@ def _extract_pdf_normal(doc_path: str) -> str:
             left_blocks = [b for b in blocks if b[2] < mid_x]
             right_blocks = [b for b in blocks if b[0] > mid_x]
             center_blocks = [b for b in blocks if b not in left_blocks and b not in right_blocks]
-            has_two_columns = len(left_blocks) > 3 and len(right_blocks) > 3
+            # Two-column detection: require a clear gap between left and right block clusters
+            # as well as sufficient blocks on each side. This avoids false positives from
+            # pages with figures, tables, or margin annotations.
+            if len(left_blocks) > 3 and len(right_blocks) > 3:
+                # Check there's a real gap between the rightmost left-column block edge
+                # and the leftmost right-column block edge
+                left_max_x = max(b[2] for b in left_blocks)  # right edge of left blocks
+                right_min_x = min(b[0] for b in right_blocks)  # left edge of right blocks
+                gap = right_min_x - left_max_x
+                has_two_columns = gap > (page_rect.width * 0.05)  # gap >= 5% of page width
+            else:
+                has_two_columns = False
 
             sorted_blocks = []
             if has_two_columns:
@@ -212,12 +223,30 @@ def _extract_pdf_scanned(doc_path: str, lang: str = None) -> str:
             if pix.n >= 5:
                 pix = fitz.Pixmap(fitz.csRGB, pix)
             img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-            # Quick OCR with eng to check if result has any text
-            probe = pytesseract.image_to_string(img, lang='chi_sim+eng')
-            cn_chars = sum(1 for c in probe if '\u4e00' <= c <= '\u9fff')
-            if cn_chars > 20:
-                lang = 'chi_sim+eng'
-                print(f"  Detected Chinese text, using chi_sim+eng for OCR")
+
+            # First probe with English only (fast)
+            try:
+                eng_probe = pytesseract.image_to_string(img, lang='eng')
+            except Exception:
+                eng_probe = ""
+
+            # Only try Chinese detection if English probe got very little text
+            if len(eng_probe.strip()) < 50:
+                try:
+                    probe = pytesseract.image_to_string(img, lang='chi_sim+eng')
+                    cn_chars = sum(1 for c in probe if '\u4e00' <= c <= '\u9fff')
+                    if cn_chars > 20:
+                        lang = 'chi_sim+eng'
+                        print(f"  Detected Chinese text, using chi_sim+eng for OCR")
+                except pytesseract.TesseractError as e:
+                    if "chi_sim" in str(e) or "Failed loading language" in str(e):
+                        print(f"  \u26a0\ufe0f  Chinese language pack not installed. Using English OCR.")
+                        print(f"     To install: brew install tesseract-lang  (macOS)")
+                        print(f"                 apt install tesseract-ocr-chi-sim  (Linux)")
+                    # Fall back to eng -- lang is already 'eng'
+            else:
+                # English probe got enough text, no need to detect Chinese
+                pass
 
         pages_text = []
         failed_pages = 0

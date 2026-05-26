@@ -19,6 +19,7 @@ summary.
 import json
 import os
 import re
+import tempfile as _tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Any
@@ -54,10 +55,23 @@ class ContentRegistry:
 
     def save(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        # Atomic write via temp file to prevent corruption on concurrent access
-        tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(self.data, indent=2, ensure_ascii=False))
-        tmp.replace(self.path)
+        # Atomic write via unique temp file (avoids race condition on .tmp name)
+        fd, tmp_str = _tempfile.mkstemp(
+            dir=str(self.path.parent),
+            prefix=".kbregistry_",
+            suffix=".tmp"
+        )
+        tmp = Path(tmp_str)
+        try:
+            with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                f.write(json.dumps(self.data, indent=2, ensure_ascii=False))
+            tmp.replace(self.path)
+        except Exception:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+            raise
 
     # ── Register / Update ────────────────────────────────────────────
 
