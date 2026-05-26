@@ -12,6 +12,19 @@ import sys
 import json
 import pytest
 
+# ── MCP server needs INTERNAL_SECRET set before import ───────────────────────
+# The module raises RuntimeError at import time if it is blank.
+os.environ.setdefault("INTERNAL_SECRET", "test-internal-secret-for-pytest!!")
+
+# ── Add MCP server directory to sys.path ─────────────────────────────────────
+_REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+_MCP_DIR = os.path.join(_REPO, "cloud_platform", "src", "server")
+if _MCP_DIR not in sys.path:
+    sys.path.insert(0, _MCP_DIR)
+_CLOUD_SRC = os.path.join(_REPO, "cloud_platform", "src")
+if _CLOUD_SRC not in sys.path:
+    sys.path.insert(0, _CLOUD_SRC)
+
 # Skip entire module if FastAPI is not installed or if there is a
 # FastAPI/Starlette version mismatch (e.g. Starlette 1.0 + FastAPI 0.115).
 pytest.importorskip("fastapi", reason="fastapi not installed — skipping cloud tests")
@@ -204,7 +217,8 @@ class TestKBAccessControl:
             client = TestClient(cloud.app)
             resp = client.post(
                 "/api/v1/knowledge-bases/members",
-                headers={"X-User-ID": "alice", "X-KB-ID": "research"},
+                headers={"X-User-ID": "alice", "X-KB-ID": "research",
+                         "X-Internal-Token": os.environ["INTERNAL_SECRET"]},
                 json={"member_user_id": "bob", "role": "read"},
             )
             assert resp.status_code == 200
@@ -233,7 +247,8 @@ class TestKBAccessControl:
             client = TestClient(cloud.app)
             resp = client.delete(
                 "/api/v1/knowledge-bases/members/bob",
-                headers={"X-User-ID": "alice", "X-KB-ID": "research"},
+                headers={"X-User-ID": "alice", "X-KB-ID": "research",
+                         "X-Internal-Token": os.environ["INTERNAL_SECRET"]},
             )
             assert resp.status_code == 200
 
@@ -263,7 +278,8 @@ class TestKBAccessControl:
             client = TestClient(cloud.app)
             resp = client.post(
                 "/api/v1/knowledge-bases/members",
-                headers={"X-User-ID": "bob", "X-KB-ID": "research"},
+                headers={"X-User-ID": "bob", "X-KB-ID": "research",
+                         "X-Internal-Token": os.environ["INTERNAL_SECRET"]},
                 json={"member_user_id": "carol", "role": "read"},
             )
             assert resp.status_code == 403
@@ -444,7 +460,8 @@ class TestSharedKbsCache:
             client = TestClient(cloud.app)
             resp = client.post(
                 "/api/v1/knowledge-bases/members",
-                headers={"X-User-ID": "alice", "X-KB-ID": "research"},
+                headers={"X-User-ID": "alice", "X-KB-ID": "research",
+                         "X-Internal-Token": os.environ["INTERNAL_SECRET"]},
                 json={"member_user_id": "bob", "role": "read"},
             )
             assert resp.status_code == 200
@@ -472,7 +489,8 @@ class TestSharedKbsCache:
             client = TestClient(cloud.app)
             resp = client.delete(
                 "/api/v1/knowledge-bases/members/bob",
-                headers={"X-User-ID": "alice", "X-KB-ID": "research"},
+                headers={"X-User-ID": "alice", "X-KB-ID": "research",
+                         "X-Internal-Token": os.environ["INTERNAL_SECRET"]},
             )
             assert resp.status_code == 200
 
@@ -512,7 +530,8 @@ class TestOwnerFieldMigration:
             client = TestClient(cloud.app)
             resp = client.post(
                 "/api/v1/knowledge-bases/members",
-                headers={"X-User-ID": "alice", "X-KB-ID": "legacy-kb"},
+                headers={"X-User-ID": "alice", "X-KB-ID": "legacy-kb",
+                         "X-Internal-Token": os.environ["INTERNAL_SECRET"]},
                 json={"member_user_id": "bob", "role": "read"},
             )
             assert resp.status_code == 200
@@ -537,7 +556,8 @@ class TestOwnerFieldMigration:
             client = TestClient(cloud.app)
             resp = client.post(
                 "/api/v1/knowledge-bases/members",
-                headers={"X-User-ID": "alice", "X-KB-ID": "legacy-kb"},
+                headers={"X-User-ID": "alice", "X-KB-ID": "legacy-kb",
+                         "X-Internal-Token": os.environ["INTERNAL_SECRET"]},
                 json={"member_user_id": "carol", "role": "write"},
             )
             assert resp.status_code == 200
