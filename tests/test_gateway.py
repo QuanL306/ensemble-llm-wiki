@@ -28,9 +28,10 @@ import time
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-# ── Gateway needs JWT_SECRET set before import ───────────────────────────────
-# The module raises RuntimeError at import time if it's blank or a known weak value.
+# ── Gateway needs JWT_SECRET and API_KEY_SALT set before import ──────────────
+# The module raises RuntimeError at import time if either is blank.
 os.environ.setdefault("JWT_SECRET", "test-secret-key-for-pytest-min32chars!!")
+os.environ.setdefault("API_KEY_SALT", "test-api-key-salt-32chars-minimum!!")
 
 # ── Add gateway directory to sys.path ────────────────────────────────────────
 _REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -86,6 +87,7 @@ class TestPureFunctions:
             result.access_token,
             os.environ["JWT_SECRET"],
             algorithms=["HS256"],
+            options={"verify_aud": False},
         )
         assert payload["sub"] == "user-abc"
         assert payload["email"] == "alice@example.com"
@@ -98,6 +100,7 @@ class TestPureFunctions:
             result.refresh_token,
             os.environ["JWT_SECRET"],
             algorithms=["HS256"],
+            options={"verify_aud": False},
         )
         assert payload.get("email") == "alice@example.com", (
             "email must be embedded in the refresh token (needed when issuing new access tokens)"
@@ -110,25 +113,29 @@ class TestPureFunctions:
             result.refresh_token,
             os.environ["JWT_SECRET"],
             algorithms=["HS256"],
+            options={"verify_aud": False},
         )
         assert payload.get("type") == "refresh"
 
-    def test_make_tokens_access_has_no_type_claim(self):
+    def test_make_tokens_access_has_type_access_claim(self):
+        """Access tokens must carry type='access' so refresh tokens are rejected at auth (H1)."""
         import jwt
         result = gateway._make_tokens("user-abc", "alice@example.com")
         payload = jwt.decode(
             result.access_token,
             os.environ["JWT_SECRET"],
             algorithms=["HS256"],
+            options={"verify_aud": False},
         )
-        assert "type" not in payload
+        assert payload.get("type") == "access"
 
     def test_make_tokens_each_call_produces_unique_jtis(self):
         import jwt
+        _opts = {"verify_aud": False}
         r1 = gateway._make_tokens("u1", "a@b.com")
         r2 = gateway._make_tokens("u1", "a@b.com")
-        p1 = jwt.decode(r1.access_token, os.environ["JWT_SECRET"], algorithms=["HS256"])
-        p2 = jwt.decode(r2.access_token, os.environ["JWT_SECRET"], algorithms=["HS256"])
+        p1 = jwt.decode(r1.access_token, os.environ["JWT_SECRET"], algorithms=["HS256"], options=_opts)
+        p2 = jwt.decode(r2.access_token, os.environ["JWT_SECRET"], algorithms=["HS256"], options=_opts)
         assert p1["jti"] != p2["jti"], "Each token must have a unique jti (for revocation)"
 
     def test_access_token_expires_in_one_hour(self):
@@ -139,6 +146,7 @@ class TestPureFunctions:
             result.access_token,
             os.environ["JWT_SECRET"],
             algorithms=["HS256"],
+            options={"verify_aud": False},
         )
         assert payload["exp"] - before == pytest.approx(3600, abs=5)
 
@@ -158,10 +166,10 @@ class TestPureFunctions:
     def test_allowed_permissions_contains_expected_values(self):
         assert "read"  in gateway._ALLOWED_PERMISSIONS
         assert "write" in gateway._ALLOWED_PERMISSIONS
-        assert "admin" in gateway._ALLOWED_PERMISSIONS
+        assert "admin" not in gateway._ALLOWED_PERMISSIONS  # H9: admin removed until privilege model defined
 
-    def test_allowed_permissions_has_exactly_three_entries(self):
-        assert len(gateway._ALLOWED_PERMISSIONS) == 3
+    def test_allowed_permissions_has_exactly_two_entries(self):
+        assert len(gateway._ALLOWED_PERMISSIONS) == 2
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -193,10 +201,23 @@ class TestAuthRoutes:
         mock.hget     = AsyncMock(return_value=None)
         mock.hgetall  = AsyncMock(return_value={})
         mock.hset     = AsyncMock(return_value=True)
+        mock.get      = AsyncMock(return_value=None)   # jwt_link / auth_epoch lookups
         mock.exists   = AsyncMock(return_value=0)
         mock.setex    = AsyncMock(return_value=True)
+        mock.delete   = AsyncMock(return_value=0)
+        mock.srem     = AsyncMock(return_value=0)
+        mock.sadd     = AsyncMock(return_value=1)
+        mock.scard    = AsyncMock(return_value=0)
         mock.smembers = AsyncMock(return_value=set())
-        mock.pipeline = MagicMock()
+        mock.ping     = AsyncMock(return_value=True)
+
+        # Pipeline mock (used by _persist_session and _revoke_all_sessions)
+        mock_pipe = MagicMock()
+        mock_pipe.execute = AsyncMock(return_value=[])
+        pipeline_ctx = MagicMock()
+        pipeline_ctx.__aenter__ = AsyncMock(return_value=mock_pipe)
+        pipeline_ctx.__aexit__  = AsyncMock(return_value=False)
+        mock.pipeline = MagicMock(return_value=pipeline_ctx)
 
         # Rate-limit Lua script: return 1 (allowed) by default
         lua_script = MagicMock()
@@ -371,6 +392,7 @@ class TestAuthRoutes:
             resp.json()["access_token"],
             os.environ["JWT_SECRET"],
             algorithms=["HS256"],
+            options={"verify_aud": False},
         )
         assert new_payload["email"] == "alice@example.com"
 
@@ -424,10 +446,23 @@ class TestKBMemberRoutes:
         mock.hget     = AsyncMock(return_value=None)
         mock.hgetall  = AsyncMock(return_value={})
         mock.hset     = AsyncMock(return_value=True)
+        mock.get      = AsyncMock(return_value=None)   # jwt_link / auth_epoch lookups
         mock.exists   = AsyncMock(return_value=0)
         mock.setex    = AsyncMock(return_value=True)
+        mock.delete   = AsyncMock(return_value=0)
+        mock.srem     = AsyncMock(return_value=0)
+        mock.sadd     = AsyncMock(return_value=1)
+        mock.scard    = AsyncMock(return_value=0)
         mock.smembers = AsyncMock(return_value=set())
-        mock.pipeline = MagicMock()
+        mock.ping     = AsyncMock(return_value=True)
+
+        # Pipeline mock (used by _persist_session)
+        mock_pipe = MagicMock()
+        mock_pipe.execute = AsyncMock(return_value=[])
+        pipeline_ctx = MagicMock()
+        pipeline_ctx.__aenter__ = AsyncMock(return_value=mock_pipe)
+        pipeline_ctx.__aexit__  = AsyncMock(return_value=False)
+        mock.pipeline = MagicMock(return_value=pipeline_ctx)
 
         lua_script = MagicMock()
         lua_script.execute = AsyncMock(return_value=1)

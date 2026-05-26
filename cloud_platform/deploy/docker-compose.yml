@@ -22,12 +22,12 @@ services:
       - "8000:8000"
     environment:
       - REDIS_URL=redis://redis:6379
-      - JWT_SECRET=${JWT_SECRET}
-      - API_KEY_SALT=${API_KEY_SALT}
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set (min 32 bytes, high entropy)}
+      - API_KEY_SALT=${API_KEY_SALT:?API_KEY_SALT must be set (min 32 bytes)}
       - MCP_SERVER_URL=http://mcp-server:8001
       - RATE_LIMIT_DEFAULT=${RATE_LIMIT_DEFAULT:-100}
       - QUOTA_DEFAULT=${QUOTA_DEFAULT:-10000}
-      - INTERNAL_SECRET=${INTERNAL_SECRET}
+      - INTERNAL_SECRET=${INTERNAL_SECRET:?INTERNAL_SECRET must be set}
     depends_on:
       redis:
         condition: service_healthy

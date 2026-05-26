@@ -4,6 +4,7 @@ MCP HTTP Server - Remote third-party access via HTTP
 Exposes knowledge base tools and resources over HTTP for cloud deployment.
 """
 
+import hmac as _hmac
 import os
 import re
 import sys
@@ -42,8 +43,12 @@ if not INTERNAL_SECRET:
 
 
 def _verify_internal(request: Request):
-    """Dependency: reject requests that don't carry the correct internal token."""
-    if INTERNAL_SECRET and request.headers.get("X-Internal-Token") != INTERNAL_SECRET:
+    """Dependency: reject requests that don't carry the correct internal token.
+
+    Uses constant-time comparison to prevent timing side-channels (H11).
+    """
+    token = request.headers.get("X-Internal-Token", "")
+    if not _hmac.compare_digest(token, INTERNAL_SECRET):
         raise HTTPException(status_code=403, detail="Forbidden")
 
 
@@ -106,8 +111,8 @@ if CORS_ORIGINS:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=CORS_ORIGINS,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=["GET", "POST", "DELETE"],
+        allow_headers=["Content-Type", "X-Request-ID"],
     )
 
 
@@ -787,52 +792,77 @@ def _get_kb_write_lock(user_id: str, kb_id: str) -> asyncio.Lock:
     return _kb_write_locks[key]
 
 
-def _guard_kb_write(user_id: str, kb_id: str, owner_id: str) -> Optional[dict]:
-    """
-    Return an error payload if the write is not allowed. Returns None when allowed.
+def _guard_kb_write(
+    user_id: str,
+    kb_id: str,
+    owner_id: str,
+    permissions: Optional[set] = None,
+) -> Optional[dict]:
+    """Return an error payload if the write is not allowed. Returns None when allowed.
 
-    Checks:
+    Checks (in order):
+      - API key has "write" in X-Permissions (H9)
       - IDs pass sanitisation (prevents path traversal)
       - KB exists under owner_id
       - requester (user_id) has write access to owner's KB
     """
+    # H9: enforce permission scope declared on the API key
+    if permissions is not None and "write" not in permissions:
+        return {
+            "content": [{"type": "text", "text": "Error: write permission required for this operation"}],
+            "isError": True,
+        }
+
     safe_uid = _sanitize_id(user_id)
     safe_kid = _sanitize_id(kb_id)
 
     if not safe_uid or not safe_kid:
         return {
             "content": [{"type": "text", "text": "Error: invalid user_id or kb_id"}],
-            "isError": True
+            "isError": True,
         }
     if safe_uid != user_id or safe_kid != kb_id:
         return {
             "content": [{"type": "text", "text": "Error: user_id or kb_id contains disallowed characters"}],
-            "isError": True
+            "isError": True,
         }
     if not kb_manager.kb_exists(owner_id, kb_id):
         return {
             "content": [{"type": "text", "text": f"Error: knowledge base '{kb_id}' not found"}],
-            "isError": True
+            "isError": True,
         }
     if not kb_manager.check_access(owner_id, kb_id, user_id, "write"):
         return {
             "content": [{"type": "text", "text": "Error: write access denied"}],
-            "isError": True
+            "isError": True,
         }
     return None
 
 
-def _guard_kb_read(user_id: str, kb_id: str, owner_id: str) -> Optional[dict]:
-    """Return an error payload if the read is not allowed. Returns None when allowed."""
+def _guard_kb_read(
+    user_id: str,
+    kb_id: str,
+    owner_id: str,
+    permissions: Optional[set] = None,
+) -> Optional[dict]:
+    """Return an error payload if the read is not allowed. Returns None when allowed.
+
+    H9: requires "read" or "write" in X-Permissions.
+    """
+    if permissions is not None and not (permissions & {"read", "write"}):
+        return {
+            "content": [{"type": "text", "text": "Error: read permission required for this operation"}],
+            "isError": True,
+        }
     if not kb_manager.kb_exists(owner_id, kb_id):
         return {
             "content": [{"type": "text", "text": f"Error: knowledge base '{kb_id}' not found"}],
-            "isError": True
+            "isError": True,
         }
     if not kb_manager.check_access(owner_id, kb_id, user_id, "read"):
         return {
             "content": [{"type": "text", "text": "Error: read access denied"}],
-            "isError": True
+            "isError": True,
         }
     return None
 
@@ -1004,6 +1034,13 @@ async def mcp_call_tool(body: ToolCallRequest, request: Request):
     """Dispatch an MCP tool call"""
     user_id, kb_id, owner_id, req_id = _get_user_context(request)
 
+    # H9: extract API-key permission scope forwarded by the gateway
+    _perm_header = request.headers.get("X-Permissions", "")
+    permissions: Optional[set] = (
+        {p.strip() for p in _perm_header.split(",") if p.strip()}
+        if _perm_header else None
+    )
+
     tool_name = body.name
     args = body.arguments
     t0 = time.monotonic()
@@ -1015,7 +1052,7 @@ async def mcp_call_tool(body: ToolCallRequest, request: Request):
 
     try:
         if tool_name == "kb_list_docs":
-            guard = _guard_kb_read(user_id, kb_id, owner_id)
+            guard = _guard_kb_read(user_id, kb_id, owner_id, permissions=permissions)
             if guard:
                 return guard
             keyword = args.get("keyword", "").lower().strip()
@@ -1099,7 +1136,7 @@ async def mcp_call_tool(body: ToolCallRequest, request: Request):
             return {"content": [{"type": "text", "text": content}], "isError": False}
 
         elif tool_name == "kb_search":
-            guard = _guard_kb_read(user_id, kb_id, owner_id)
+            guard = _guard_kb_read(user_id, kb_id, owner_id, permissions=permissions)
             if guard:
                 return guard
             query = args.get("query", "")
@@ -1125,7 +1162,7 @@ async def mcp_call_tool(body: ToolCallRequest, request: Request):
             return {"content": [{"type": "text", "text": content}], "isError": False}
 
         elif tool_name == "kb_get_document":
-            guard = _guard_kb_read(user_id, kb_id, owner_id)
+            guard = _guard_kb_read(user_id, kb_id, owner_id, permissions=permissions)
             if guard:
                 return guard
             doc_id = args.get("doc_id", "")
@@ -1141,7 +1178,7 @@ async def mcp_call_tool(body: ToolCallRequest, request: Request):
             return {"content": [{"type": "text", "text": raw_content + "\n\n[END OF DOCUMENT — present the content to the user, do not call any more tools]"}], "isError": False}
 
         elif tool_name == "kb_query":
-            guard = _guard_kb_read(user_id, kb_id, owner_id)
+            guard = _guard_kb_read(user_id, kb_id, owner_id, permissions=permissions)
             if guard:
                 return guard
             question = args.get("question", "")
@@ -1300,7 +1337,7 @@ async def mcp_call_tool(body: ToolCallRequest, request: Request):
             }
 
         elif tool_name == "kb_write_article":
-            guard = _guard_kb_write(user_id, kb_id, owner_id)
+            guard = _guard_kb_write(user_id, kb_id, owner_id, permissions=permissions)
             if guard:
                 return guard
 
@@ -1346,7 +1383,7 @@ async def mcp_call_tool(body: ToolCallRequest, request: Request):
               }
 
         elif tool_name == "kb_append_note":
-            guard = _guard_kb_write(user_id, kb_id, owner_id)
+            guard = _guard_kb_write(user_id, kb_id, owner_id, permissions=permissions)
             if guard:
                 return guard
 
@@ -1396,7 +1433,7 @@ async def mcp_call_tool(body: ToolCallRequest, request: Request):
               }
 
         elif tool_name == "kb_update_index":
-            guard = _guard_kb_write(user_id, kb_id, owner_id)
+            guard = _guard_kb_write(user_id, kb_id, owner_id, permissions=permissions)
             if guard:
                 return guard
 
@@ -1419,7 +1456,7 @@ async def mcp_call_tool(body: ToolCallRequest, request: Request):
                 }
 
         elif tool_name == "kb_save_synthesis":
-            guard = _guard_kb_write(user_id, kb_id, owner_id)
+            guard = _guard_kb_write(user_id, kb_id, owner_id, permissions=permissions)
             if guard:
                 return guard
 
