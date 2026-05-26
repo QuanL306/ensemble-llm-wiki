@@ -1109,28 +1109,36 @@ def _extract_wiki_links(articles_dir: str) -> dict:
 
 # ---------- LLM compilation steps --------------------------
 
-def _compile_with_retry(backend, model: str, file_info: dict, kb_path: str) -> Tuple[Optional[str], Optional[str]]:
-    """Call _compile_document with error classification only.
+def _compile_with_retry(backend, model: str, file_info: dict, kb_path: str, max_retries: int = 3) -> Tuple[Optional[str], Optional[str]]:
+    """Call _compile_document with retry logic for transient errors.
 
-    The underlying LLM client (llm.py) already has 3-attempt exponential
-    backoff for HTTP errors. This wrapper classifies failures so the
-    caller can decide whether to skip or record.
+    Retries up to *max_retries* times on LLMTransientError with exponential
+    backoff (2 ** attempt seconds). Fails immediately on LLMPermanentError
+    without any retry.
 
     Returns (article_text, error_message).
     On success: (text, None).
     On failure: (None, error_string).
     """
+    import time
     from core.llm import LLMTransientError, LLMPermanentError
 
-    try:
-        result = _compile_document(backend, model, file_info, kb_path)
-        return result, None
-    except LLMPermanentError as exc:
-        return None, str(exc)
-    except LLMTransientError as exc:
-        return None, f"LLM error (already retried): {exc}"
-    except Exception as exc:
-        return None, str(exc)
+    last_error: str = ""
+    for attempt in range(max_retries):
+        try:
+            result = _compile_document(backend, model, file_info, kb_path)
+            return result, None
+        except LLMPermanentError as exc:
+            # No retry — configuration or auth error, won't resolve itself.
+            return None, str(exc)
+        except LLMTransientError as exc:
+            last_error = f"LLM transient error (attempt {attempt + 1}/{max_retries}): {exc}"
+            if attempt < max_retries - 1:
+                time.sleep(2 ** attempt)
+        except Exception as exc:
+            return None, str(exc)
+
+    return None, last_error
 
 
 def _build_graph_context(file_info: dict, kb_path: str) -> str:
