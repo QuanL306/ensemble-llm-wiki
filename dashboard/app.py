@@ -34,19 +34,16 @@ app = FastAPI(title="Knowledge Base Dashboard", version="2.0.0")
 # Configuration
 # ============================================================
 
-# Graphify project list (existing graphs + KB auto-discovery)
-GRAPHIFY_PROJECTS = {
-    "polyprospects": {
-        "name": "PolyProspects",
-        "path": str(Path.home() / "Documents/Home Files/polyprospects/graphify-out"),
-        "description": "Geopolitical think-tank website",
-    },
-    "gdelt": {
-        "name": "GDELT System",
-        "path": str(Path.home() / "Documents/Home Files/GDELT_System/graphify-out"),
-        "description": "Geopolitical event data system",
-    },
-}
+# Hardcoded Graphify projects (optional — add your own here).
+# Auto-discovery via .kbaconfig covers most cases; this dict is for graphs
+# that live outside a standard KB directory (e.g. standalone Graphify runs).
+# Example:
+#   "my_project": {
+#       "name": "My Project",
+#       "path": "/path/to/graphify-out",
+#       "description": "What this graph covers",
+#   },
+GRAPHIFY_PROJECTS = {}
 
 
 def discover_graphify_outputs() -> dict:
@@ -86,15 +83,6 @@ def discover_knowledge_bases() -> dict:
     result = {}
     root = Path(KB_ROOT)
     if not root.is_dir():
-        # Try alternative: scan parent for .kbaconfig children
-        for alt in [
-            Path.home() / "Documents/Home Files/Notes",
-            Path.home() / "Documents",
-        ]:
-            if alt.is_dir():
-                for child in alt.iterdir():
-                    if child.is_dir() and (child / ".kbaconfig").exists():
-                        result[child.name] = str(child)
         return result
 
     for child in sorted(root.iterdir()):

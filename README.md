@@ -34,7 +34,7 @@ A complete ecosystem for building, accessing, and sharing knowledge with AI — 
 ```
 Interactive (MCP-first)          Headless (cron / session_start.py)
 ─────────────────────────        ────────────────────────────────
-Hermes agent                     session_start.py
+Your AI client                   session_start.py
   │                                │
   ├─ mcp_skill_seeker_*            ├─ skill_seekers.py (subprocess)
   │  → raw/                        │  → raw/

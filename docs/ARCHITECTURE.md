@@ -35,7 +35,7 @@ This architecture was originally inspired by **Karpathy's LLM Wiki** — the cor
 
 ### Interactive (MCP-first)
 ```
-Hermes agent
+Your AI client (Claude, Cursor, etc.)
   ├─ mcp_skill_seeker_*        ← native Skill Seekers MCP
   │  → raw/
   ├─ graphify --mcp            ← native Graphify MCP
