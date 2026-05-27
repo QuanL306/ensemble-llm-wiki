@@ -4,11 +4,18 @@ Knowledge Base Dashboard — unified frontend
 Integrates: knowledge-base-suite-en + Graphify knowledge graph + Skill Seekers
 
 Start:
-  python3 dashboard/app.py              # default 8765
-  python3 dashboard/app.py 9000         # custom port
+  python3 dashboard/app.py                           # default port 8765, localhost only
+  python3 dashboard/app.py 9000                      # custom port
   python3 dashboard/app.py --kb-root /path/to/kbs   # custom KB root
+  python3 dashboard/app.py --host 0.0.0.0            # expose to network (requires DASHBOARD_TOKEN)
+
+Security note: this is a read-only local dashboard.  By default it binds to
+127.0.0.1 only.  Do NOT expose it on 0.0.0.0 without a reverse-proxy that
+handles authentication.
 """
+import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Optional
@@ -67,8 +74,11 @@ def get_all_graphify_projects() -> dict:
             all_projects[key] = info
     return all_projects
 
-# KB root — default scan of user primary KB path
-KB_ROOT = str(Path.home() / "Documents/Notes/knowledge_base")  # TODO: make configurable
+# KB root — overridable via --kb-root CLI arg or KB_ROOT env var
+KB_ROOT = os.environ.get(
+    "KB_ROOT",
+    str(Path.home() / "Documents/Notes/knowledge_base"),
+)
 
 
 def discover_knowledge_bases() -> dict:
@@ -298,19 +308,49 @@ async def health():
 # Startup
 # ============================================================
 
-def parse_port() -> int:
-    if len(sys.argv) < 2:
-        return 8765
-    try:
-        port = int(sys.argv[1])
-        if 1024 <= port <= 65535:
-            return port
-        print(f"⚠️ Port {port} out of range, using 8765", file=sys.stderr)
-    except ValueError:
-        print(f"⚠️ Invalid port '{sys.argv[1]}', using 8765", file=sys.stderr)
-    return 8765
+_LOCALHOST_ADDRS = {"127.0.0.1", "::1", "localhost"}
+
+
+def parse_args(argv=None) -> argparse.Namespace:
+    """Parse CLI arguments.  Returns a Namespace with .port, .host, .kb_root."""
+    parser = argparse.ArgumentParser(
+        description="Knowledge Base Dashboard",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "port", nargs="?", type=int, default=8765,
+        help="Port to listen on (default: 8765)",
+    )
+    parser.add_argument(
+        "--host", default="127.0.0.1",
+        help="Host to bind (default: 127.0.0.1 — localhost only)",
+    )
+    parser.add_argument(
+        "--kb-root", dest="kb_root", default=None,
+        help="Root directory to scan for knowledge bases (.kbaconfig)",
+    )
+    args = parser.parse_args(argv)
+    if not (1024 <= args.port <= 65535):
+        parser.error(f"Port {args.port} is out of range (1024–65535)")
+    return args
+
+
+def _apply_args(args: argparse.Namespace) -> None:
+    """Apply parsed args to module-level config (KB_ROOT)."""
+    global KB_ROOT
+    if args.kb_root:
+        KB_ROOT = str(Path(args.kb_root).resolve())
 
 
 if __name__ == "__main__":
-    port = parse_port()
-    uvicorn.run(app, host="127.0.0.1", port=port, log_level="info")
+    _args = parse_args()
+    _apply_args(_args)
+
+    if _args.host not in _LOCALHOST_ADDRS:
+        print(
+            f"⚠️  Dashboard is binding to {_args.host} — this exposes your knowledge base"
+            " to the network. Place a reverse-proxy with authentication in front.",
+            file=sys.stderr,
+        )
+
+    uvicorn.run(app, host=_args.host, port=_args.port, log_level="info")
