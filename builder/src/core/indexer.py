@@ -177,15 +177,22 @@ class IndexManager:
             del self.index["files"][file_id]
 
     def get_stats(self) -> Dict[str, int]:
-        """Return document count by status"""
-        files = self.index["files"].values()
+        """Return document count by status.
+
+        'compiled' counts docs that have been through compile-llm
+        (tracked via the llm_compiled_at timestamp field rather than a
+        separate status value, since compile-llm does not rewrite the
+        ingest status field).
+        """
+        files = list(self.index["files"].values())
 
         return {
-            "total": len(files),
-            "pending": sum(1 for f in files if f.get("status") == "pending"),
+            "total":      len(files),
+            "pending":    sum(1 for f in files if f.get("status") == "pending"),
             "processing": sum(1 for f in files if f.get("status") == "processing"),
-            "completed": sum(1 for f in files if f.get("status") == "completed"),
-            "error": sum(1 for f in files if f.get("status") == "error")
+            "completed":  sum(1 for f in files if f.get("status") == "completed"),
+            "compiled":   sum(1 for f in files if f.get("llm_compiled_at")),
+            "error":      sum(1 for f in files if f.get("status") == "error"),
         }
 
     def generate_file_id(self, file_path: str) -> str:

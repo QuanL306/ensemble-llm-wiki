@@ -3,7 +3,7 @@
 entity_types.py — Extended wiki entity types
 
 Borrowed from: OmegaWiki (skyllwt/OmegaWiki) — 9 entity types
-Key additions for knowledge-base-suite-en:
+Key additions for ensemble-llm-wiki:
   - methods/    — Reusable analytical frameworks, techniques, methodologies
   - topics/     — Research direction maps with SOTA tracking
   - foundations/ — Already implemented in foundations.py (terminal pages)

@@ -965,7 +965,8 @@ def _generate_embeddings(kb_path: str, indexer: 'IndexManager') -> int:
     try:
         from fastembed import TextEmbedding
     except ImportError:
-        print("   ⚠️  fastembed import failed — skipping embeddings")
+        # fastembed is optional. Without it, search falls back to TF-IDF keyword
+        # scoring (still works well). Install with: pip install fastembed
         return 0
 
     from core.scoring import build_doc_embed_text, EMBED_TEXT_VERSION
@@ -2457,10 +2458,39 @@ def print_kb_status(kb_path: str, header: bool = True) -> None:
     total = len(entries)
 
     if total == 0:
-        # Fall back to IndexManager counts when registry is empty
+        # Fall back to IndexManager (file_index.json) when .kbregistry.json is empty.
+        # This handles KBs built with the legacy pipeline that writes file_index.json
+        # directly rather than going through ContentRegistry.
         indexer = IndexManager(kb_path)
         s = indexer.get_stats()
-        print(f"  {s['total']} documents  (no registry yet — run kb add or kb ingest)")
+        n = s["total"]
+        if n == 0:
+            print(f"  0 documents  (run kb add or kb ingest to get started)")
+            print("─" * width)
+            return
+
+        ing  = s["completed"]
+        cmp  = s["compiled"]
+        # Graphify: check for graph.json output
+        graph_file = os.path.join(kb_path, "wiki", "graphify-out", "graph.json")
+        if not os.path.exists(graph_file):
+            graph_file = os.path.join(kb_path, "wiki", "_articles", "graphify-out", "graph.json")
+        if os.path.exists(graph_file):
+            try:
+                import json as _json
+                g = _json.loads(open(graph_file).read())
+                grf_nodes = len(g.get("nodes", []))
+                grf_info  = f"  ✅  ({grf_nodes} nodes)"
+            except Exception:
+                grf_info = "  ✅"
+        else:
+            grf_info = ""
+
+        print(f"  {n} document{'s' if n != 1 else ''}  (legacy pipeline — file_index.json)\n")
+        print(f"  Ingest      {_progress_bar(ing, n)}  {ing}/{n}{'  ✅' if ing == n else ''}")
+        grf_done = 1 if grf_info else 0
+        print(f"  Graphify    {_progress_bar(grf_done, 1)}  {'done' if grf_info else 'pending'}{grf_info}")
+        print(f"  Compile LLM {_progress_bar(cmp, n)}  {cmp}/{n}{'  ✅' if cmp == n else ''}")
         print("─" * width)
         return
 

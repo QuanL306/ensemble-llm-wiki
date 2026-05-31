@@ -1,4 +1,4 @@
-# knowledge-base-suite-en — full dependency list
+# ensemble-llm-wiki — full dependency list
 # Install: pip install -r requirements.txt
 
 # Core

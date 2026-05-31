@@ -1,7 +1,7 @@
 # Codebase Audit Report
 
 **Last updated:** 2026-05-26  
-**Scope:** knowledge-base-suite-en — all four components  
+**Scope:** ensemble-llm-wiki — all four components  
 **Audit rounds completed:** 6 (2026-05-07 through 2026-05-26)
 
 ---

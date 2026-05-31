@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Knowledge Base Dashboard — unified frontend
-Integrates: knowledge-base-suite-en + Graphify knowledge graph + Skill Seekers
+Integrates: ensemble-llm-wiki + Graphify knowledge graph + Skill Seekers
 
 Start:
   python3 dashboard/app.py                           # default port 8765, localhost only
@@ -24,7 +24,7 @@ from fastapi import FastAPI, Query
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 import uvicorn
 
-# Project root = dashboard parent = knowledge-base-suite-en/
+# Project root = dashboard parent = ensemble-llm-wiki/
 BASE_DIR = Path(__file__).parent.parent
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 
@@ -79,7 +79,7 @@ KB_ROOT = os.environ.get(
 
 
 def discover_knowledge_bases() -> dict:
-    """Discover all knowledge-base-suite-en KBs (via .kbaconfig)"""
+    """Discover all ensemble-llm-wiki KBs (via .kbaconfig)"""
     result = {}
     root = Path(KB_ROOT)
     if not root.is_dir():
@@ -175,11 +175,11 @@ def compute_community_summary(data: dict) -> list:
 
 
 # ============================================================
-# KB stats (knowledge-base-suite-en format: file_index.json)
+# KB stats (ensemble-llm-wiki format: file_index.json)
 # ============================================================
 
 def load_kb_stats() -> dict:
-    """Read knowledge-base-suite-en KB stats via file_index.json"""
+    """Read ensemble-llm-wiki KB stats via file_index.json"""
     kbs = discover_knowledge_bases()
     if not kbs:
         return {"available": False, "kbs": {}, "total_docs": 0,

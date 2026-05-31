@@ -1,5 +1,5 @@
 """
-Multi-backend LLM client for knowledge-base-suite-en.
+Multi-backend LLM client for ensemble-llm-wiki.
 
 Supports 7 providers with a unified interface. Zero external SDK deps
 (uses stdlib urllib). All providers compatible with OpenAI-style

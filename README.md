@@ -128,11 +128,11 @@ kb harvest --sources cursor   # Cursor sessions instead
 kb harvest --list             # show what's already imported
 
 # 3. Serve via MCP
-cd /path/to/knowledge-base-suite-en/local-server/src
+cd /path/to/ensemble-llm-wiki/local-server/src
 python3 server.py --kb-path /Users/yourname/my-kb
 
 # 4. Auto-sync (SessionStart)
-python3 /path/to/knowledge-base-suite-en/builder/src/core/session_start.py --kb-path ~/my-kb
+python3 /path/to/ensemble-llm-wiki/builder/src/core/session_start.py --kb-path ~/my-kb
 ```
 
 ## Building from Local PDFs
@@ -168,7 +168,7 @@ kb compile-llm --docs
 Then serve it:
 
 ```bash
-cd /path/to/knowledge-base-suite-en/local-server/src
+cd /path/to/ensemble-llm-wiki/local-server/src
 python3 server.py --kb-path /Users/yourname/my-kb
 ```
 
@@ -212,14 +212,14 @@ kb fetch-list
 Then serve:
 
 ```bash
-cd /path/to/knowledge-base-suite-en/local-server/src
+cd /path/to/ensemble-llm-wiki/local-server/src
 python3 server.py --kb-path /Users/yourname/my-kb
 ```
 
 ## Directory Structure
 
 ```
-knowledge-base-suite-en/
+ensemble-llm-wiki/
 ├── builder/
 │   └── src/
 │       ├── cli.py                       # CLI entry point

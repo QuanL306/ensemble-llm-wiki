@@ -27,7 +27,7 @@ kb compile-llm   # recommended; requires any LLM API key (see LLM API Key Setup 
 ### 2. Start the server
 
 ```bash
-cd /path/to/knowledge-base-suite-en/local-server/src
+cd /path/to/ensemble-llm-wiki/local-server/src
 python3 server.py --kb-path /Users/yourname/my-research
 ```
 
@@ -57,7 +57,7 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
     "my-research": {
       "command": "python3",
       "args": [
-        "/path/to/knowledge-base-suite-en/local-server/src/server.py",
+        "/path/to/ensemble-llm-wiki/local-server/src/server.py",
         "--kb-path",
         "/Users/yourname/my-research"
       ],
@@ -82,7 +82,7 @@ Edit `~/.cursor/mcp.json`:
     "my-kb": {
       "command": "python3",
       "args": [
-        "/path/to/knowledge-base-suite-en/local-server/src/server.py",
+        "/path/to/ensemble-llm-wiki/local-server/src/server.py",
         "--kb-path",
         "/Users/yourname/my-research"
       ]
@@ -99,7 +99,7 @@ Edit `~/.cursor/mcp.json`:
     "my-kb": {
       "command": "python3",
       "args": [
-        "/path/to/knowledge-base-suite-en/local-server/src/server.py",
+        "/path/to/ensemble-llm-wiki/local-server/src/server.py",
         "--kb-path",
         "/Users/yourname/my-research"
       ]

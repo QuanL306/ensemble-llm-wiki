@@ -28,7 +28,7 @@ pip install -r requirements.txt
 # Add the repo to your PATH so the 'kb' command works from any directory.
 # Replace /path/to with the actual location where you cloned the repo.
 # macOS / Linux — paste the export line into ~/.zshrc or ~/.bashrc:
-export PATH="$PATH:/path/to/knowledge-base-suite-en"
+export PATH="$PATH:/path/to/ensemble-llm-wiki"
 
 # Windows — add the cloned folder to your system PATH, or invoke kb.bat directly
 

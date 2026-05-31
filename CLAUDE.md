@@ -247,7 +247,7 @@ my-kb/
 |---------|-------|-----|
 | `compile-llm` does nothing | No LLM API key set | `export DEEPSEEK_API_KEY=sk-...` |
 | PDF text is garbled / empty | Scanned PDF, no OCR | `brew install tesseract poppler` |
-| `kb` command not found | Not on PATH | `export PATH="$PATH:/path/to/knowledge-base-suite-en"` |
+| `kb` command not found | Not on PATH | `export PATH="$PATH:/path/to/ensemble-llm-wiki"` |
 | `kb graphify` fails silently | graphify not installed | `pip install graphifyy` |
 | `kb add` skips compile | graphify hasn't run yet | Run `kb graphify` first, or use `--skip-graphify-check` |
 | Registry out of sync | Manual file edits | `kb clean` to remove stale entries |
