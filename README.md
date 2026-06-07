@@ -116,15 +116,24 @@ Role hierarchy: `write` also grants `read`. Only the owner can manage membership
 ## Quick Start
 
 ```bash
-# 0. Set an LLM API key (DeepSeek recommended — cheap and fast)
-#    Copy .env.example → .env and fill in one key, or just export it:
-export DEEPSEEK_API_KEY=sk-...   # or OPENAI_API_KEY / ANTHROPIC_API_KEY / GEMINI_API_KEY
+# 0. Install deps + set an LLM API key (DeepSeek recommended — cheap and fast)
+pip install -r requirements.txt
+brew install tesseract poppler          # macOS; skip on Linux (apt install tesseract-ocr poppler-utils)
+export DEEPSEEK_API_KEY=sk-...          # or OPENAI_API_KEY / ANTHROPIC_API_KEY / GEMINI_API_KEY
+# Optional: if graphify is in a venv not on PATH → export KB_PYTHON=/path/to/venv/bin/python3
 
 # 1. Build a knowledge base
 kb init ~/my-kb --name "My KB"
 cd ~/my-kb
-# Add files to raw/, then:
-kb ingest && kb compile-llm
+
+# Add files — kb add symlinks them in, detects the right pipeline, and runs all stages:
+kb add path/to/paper.pdf --yes
+kb add path/to/notes.md --yes
+
+# Or run stages manually for full control:
+kb ingest        # extract text from raw/
+kb graphify      # build knowledge graph (requires LLM API key)
+kb compile-llm --docs --yes   # LLM writes wiki articles
 
 # 2. Harvest AI session transcripts into the KB
 kb harvest --since 7          # last 7 days of Claude Code sessions
@@ -133,7 +142,7 @@ kb harvest --list             # show what's already imported
 
 # 3. Serve via MCP
 cd /path/to/ensemble-llm-wiki/local-server/src
-python3 server.py --kb-path /Users/yourname/my-kb
+python3 server.py --kb-path ~/my-kb
 
 # 4. Auto-sync (SessionStart)
 python3 /path/to/ensemble-llm-wiki/builder/src/core/session_start.py --kb-path ~/my-kb
@@ -159,21 +168,24 @@ Skill Seekers does structured extraction that the builder's raw PDF reader does 
 kb init ~/my-kb --name "Research Library"
 cd ~/my-kb
 
-# Copy your PDFs into the raw/ intake folder
-cp /path/to/your/pdfs/*.pdf raw/
+# Add PDFs — creates symlinks (no copying), auto-detects pipeline, runs ingest:
+kb add /path/to/your/pdfs/*.pdf --yes
 
-# Ingest: extract text + metadata from every file in raw/
-kb ingest
+# Build knowledge graph (uses LLM to extract entities + relationships):
+kb graphify
 
-# Compile: LLM writes wiki articles + builds search index + embeddings
-kb compile-llm --docs
+# Compile: LLM writes one wiki article per document
+kb compile-llm --docs --yes
 ```
+
+> **Scanned PDFs:** `kb ingest` auto-detects image-only PDFs and runs OCR via Tesseract.
+> Install language packs for non-English: `brew install tesseract-lang` (macOS).
 
 Then serve it:
 
 ```bash
 cd /path/to/ensemble-llm-wiki/local-server/src
-python3 server.py --kb-path /Users/yourname/my-kb
+python3 server.py --kb-path ~/my-kb
 ```
 
 ---
@@ -217,7 +229,7 @@ Then serve:
 
 ```bash
 cd /path/to/ensemble-llm-wiki/local-server/src
-python3 server.py --kb-path /Users/yourname/my-kb
+python3 server.py --kb-path ~/my-kb
 ```
 
 ## Directory Structure
