@@ -1,0 +1,19 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# System deps for OCR (optional — remove if not using scanned PDFs)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    tesseract-ocr \
+    poppler-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY src/ ./src/
+COPY ../builder/src/ ./builder/src/
+
+EXPOSE 8001
+
+CMD ["python", "src/server/mcp_http_server.py"]

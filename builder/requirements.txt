@@ -1,0 +1,35 @@
+# Knowledge Base Builder - Requirements
+#
+# NOTE: End users should install from the root requirements.txt instead:
+#   pip install -r requirements.txt   (from repo root)
+#
+# This file is kept as a reference for the builder component's direct
+# dependencies. It does not include jieba, graphifyy, or fastembed.
+
+# Core dependencies
+PyYAML>=6.0,<7.0
+
+# PDF processing
+PyMuPDF>=1.23.0,<2.0
+
+# EPUB processing
+EbookLib>=0.18,<1.0
+beautifulsoup4>=4.12.0,<5.0
+lxml>=4.9.0
+
+# OCR for scanned PDFs
+pytesseract>=0.3.10,<1.0
+Pillow>=10.0.0,<12.0
+pdf2image>=1.16.0
+
+# Utilities
+python-dateutil>=2.8.0
+
+# Skill Seekers integration (optional — for `fetch` command)
+# Basic install:  pip install skill-seekers
+# Full install:   pip install skill-seekers[all]
+# skill-seekers>=3.5.0
+
+# LLM compilation (optional — for `compile-llm` command)
+# pip install anthropic
+# anthropic>=0.40.0

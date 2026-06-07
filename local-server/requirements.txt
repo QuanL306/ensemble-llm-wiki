@@ -1,0 +1,16 @@
+# Knowledge Base Local MCP Server - Requirements
+
+# MCP Protocol
+mcp>=1.0.0
+
+# Include builder dependencies
+PyYAML>=6.0,<7.0
+PyMuPDF>=1.23.0,<2.0
+EbookLib>=0.18,<1.0
+beautifulsoup4>=4.12.0,<5.0
+lxml>=4.9.0
+pytesseract>=0.3.10,<1.0
+Pillow>=10.0.0,<12.0
+pdf2image>=1.16.0
+python-dateutil>=2.8.0
+graphifyy>=0.8.0

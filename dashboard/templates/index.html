@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Knowledge Base Dashboard</title>
+<style>
+:root {
+  --bg: #0d1117;
+  --surface: #161b22;
+  --border: #30363d;
+  --text: #c9d1d9;
+  --text-muted: #8b949e;
+  --accent: #58a6ff;
+  --accent-green: #3fb950;
+  --accent-orange: #d2991d;
+  --accent-purple: #a371f7;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.5;
+}
+header {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 1rem 2rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: sticky; top: 0; z-index: 100;
+}
+header h1 { font-size: 1.25rem; font-weight: 600; }
+header .badge { font-size: 0.8rem; color: var(--text-muted); }
+nav { display: flex; gap: 1px; background: var(--border); border-radius: 6px; overflow: hidden; }
+nav button {
+  background: var(--surface); color: var(--text-muted); border: none;
+  padding: 0.5rem 1.2rem; cursor: pointer; font-size: 0.875rem;
+  transition: all 0.15s;
+}
+nav button.active { background: var(--accent); color: #fff; }
+nav button:hover:not(.active) { color: var(--text); }
+
+main { max-width: 1400px; margin: 0 auto; padding: 1.5rem; }
+.stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+.stat-card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  padding: 1rem 1.25rem;
+}
+.stat-card .label { font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
+.stat-card .value { font-size: 1.75rem; font-weight: 700; margin: 0.25rem 0; }
+.stat-card .value.green { color: var(--accent-green); }
+.stat-card .value.blue { color: var(--accent); }
+.stat-card .value.orange { color: var(--accent-orange); }
+.stat-card .value.purple { color: var(--accent-purple); }
+
+.panels { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+@media (max-width: 900px) { .panels { grid-template-columns: 1fr; } }
+.panel {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  overflow: hidden;
+}
+.panel-header {
+  padding: 0.75rem 1.25rem; border-bottom: 1px solid var(--border);
+  font-weight: 600; font-size: 0.875rem; display: flex; justify-content: space-between; align-items: center;
+}
+.panel-body { padding: 1rem 1.25rem; max-height: 500px; overflow-y: auto; }
+
+.graph-frame { width: 100%; height: 600px; border: none; border-radius: 8px; }
+.full-width { grid-column: 1 / -1; }
+
+.node-list { display: flex; flex-direction: column; gap: 0.5rem; }
+.node-item {
+  display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 0.75rem;
+  background: var(--bg); border-radius: 6px; font-size: 0.875rem;
+}
+.node-item .degree {
+  background: var(--accent); color: #fff; border-radius: 12px;
+  padding: 0.1rem 0.5rem; font-size: 0.7rem; font-weight: 700;
+  min-width: 2rem; text-align: center;
+}
+.node-item .label { flex: 1; }
+.node-item .meta { font-size: 0.7rem; color: var(--text-muted); }
+
+.community-list { display: flex; flex-direction: column; gap: 0.5rem; }
+.community-item {
+  display: flex; align-items: center; gap: 0.75rem; padding: 0.5rem 0.75rem;
+  background: var(--bg); border-radius: 6px; font-size: 0.875rem;
+}
+.community-item .cid {
+  background: var(--accent-purple); color: #fff; border-radius: 12px;
+  padding: 0.1rem 0.6rem; font-size: 0.7rem; font-weight: 700;
+}
+.community-item .info { flex: 1; }
+.community-item .count { font-size: 0.75rem; color: var(--text-muted); }
+.community-item .samples { font-size: 0.7rem; color: var(--text-muted); margin-top: 0.15rem; }
+
+.project-selector { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
+.project-btn {
+  background: var(--surface); color: var(--text-muted); border: 1px solid var(--border);
+  padding: 0.4rem 1rem; border-radius: 6px; cursor: pointer; font-size: 0.875rem;
+}
+.project-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+.loading { text-align: center; padding: 2rem; color: var(--text-muted); }
+.error { color: #f85149; padding: 1rem; }
+
+select, input {
+  background: var(--bg); color: var(--text); border: 1px solid var(--border);
+  padding: 0.4rem 0.75rem; border-radius: 6px; font-size: 0.875rem;
+}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>📚 Knowledge Base Dashboard</h1>
+    <span class="badge">ChromaDB + Graphify + Skill Seekers</span>
+  </div>
+  <nav>
+    <button class="active" onclick="switchTab('overview', this)">Overview</button>
+    <button onclick="switchTab('graph', this)">Knowledge Graph</button>
+    <button onclick="switchTab('nodes', this)">God Nodes</button>
+    <button onclick="switchTab('communities', this)">Communities</button>
+  </nav>
+</header>
+
+<main>
+  <!-- Stats cards -->
+  <div class="stats-grid" id="statsGrid">
+    <div class="stat-card"><div class="label">Loading…</div></div>
+  </div>
+
+  <!-- Project selector -->
+  <div class="project-selector" id="projectSelector" style="display:none"></div>
+
+  <!-- Content panels -->
+  <div id="tabOverview" class="panels">
+    <div class="panel full-width">
+      <div class="panel-header">📖 KB Status</div>
+      <div class="panel-body" id="kbStatus">Loading…</div>
+    </div>
+  </div>
+
+  <div id="tabGraph" style="display:none">
+    <iframe class="graph-frame" id="graphFrame" src=""></iframe>
+  </div>
+
+  <div id="tabNodes" style="display:none">
+    <div class="panels">
+      <div class="panel">
+        <div class="panel-header">⭐ God Nodes (God Nodes) <span style="font-weight:400;font-size:0.75rem">sorted by degree centrality</span></div>
+        <div class="panel-body"><div class="node-list" id="godNodes">Select a project</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="tabCommunities" style="display:none">
+    <div class="panels">
+      <div class="panel">
+        <div class="panel-header">🔮 Community Detection</div>
+        <div class="panel-body"><div class="community-list" id="communityList">Select a project</div></div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script>
+let currentProject = '';
+let statsData = null;
+
+async function loadStats() {
+  try {
+    const resp = await fetch('/api/stats');
+    statsData = await resp.json();
+    renderStats(statsData);
+    
+    // Default to first project
+    const projects = Object.keys(statsData.graphify_projects || {});
+    if (projects.length > 0) {
+      currentProject = projects[0];
+      renderProjectSelector(projects);
+      loadProjectData(currentProject);
+    }
+  } catch(e) {
+    document.getElementById('statsGrid').innerHTML = '<div class="error">Failed to load data</div>';
+  }
+}
+
+function renderStats(data) {
+  let html = '';
+  
+  // KB stats
+  const kb = data.knowledge_base || {};
+  if (kb.available) {
+    html += `<div class="stat-card"><div class="label">Total chunks</div><div class="value blue">${kb.total_chunks.toLocaleString()}</div></div>`;
+    html += `<div class="stat-card"><div class="label">Collections</div><div class="value green">${kb.collections.length}</div></div>`;
+  } else {
+    html += `<div class="stat-card"><div class="label">Knowledge Base</div><div class="value" style="color:var(--text-muted);font-size:1rem">Not connected</div></div>`;
+  }
+  
+  // Graph stats
+  for (const [key, proj] of Object.entries(data.graphify_projects || {})) {
+    html += `<div class="stat-card">
+      <div class="label">${proj.name} Graph</div>
+      <div class="value purple">${proj.nodes.toLocaleString()}</div>
+      <div style="font-size:0.75rem;color:var(--text-muted)">${proj.edges.toLocaleString()} edges · ${proj.communities} Communities</div>
+    </div>`;
+  }
+  
+  document.getElementById('statsGrid').innerHTML = html || '<div class="stat-card"><div class="label">No data</div></div>';
+  
+  // KB status
+  const kbStatus = document.getElementById('kbStatus');
+  if (kb.available) {
+    kbStatus.innerHTML = kb.collections.map(c => 
+      `<div class="node-item">
+        <span style="font-weight:600">${c.name}</span>
+        <span class="meta">${c.count.toLocaleString()} chunks</span>
+      </div>`
+    ).join('');
+  } else {
+    kbStatus.innerHTML = '<div class="loading">KB not initialized or vector DB path missing</div>';
+  }
+}
+
+function renderProjectSelector(projects) {
+  const sel = document.getElementById('projectSelector');
+  sel.style.display = 'flex';
+  sel.innerHTML = projects.map(p => {
+    const proj = statsData?.graphify_projects?.[p] || {};
+    return `<button class="project-btn ${p === currentProject ? 'active' : ''}"
+      onclick="switchProject('${p}', this)">${proj.name || p}</button>`;
+  }).join('');
+}
+
+async function loadProjectData(project) {
+  document.getElementById('graphFrame').src = `/api/graph/${project}/html`;
+  
+  try {
+    const resp = await fetch(`/api/graph/${project}?top_nodes=30`);
+    const data = await resp.json();
+    renderGodNodes(data.god_nodes || []);
+    renderCommunities(data.communities || []);
+  } catch(e) {
+    document.getElementById('godNodes').innerHTML = '<div class="error">Load failed</div>';
+  }
+}
+
+function renderGodNodes(nodes) {
+  const el = document.getElementById('godNodes');
+  if (!nodes.length) {
+    el.innerHTML = '<div class="loading">No data</div>';
+    return;
+  }
+  el.innerHTML = nodes.map((n, i) => `
+    <div class="node-item">
+      <span style="color:var(--text-muted);font-size:0.7rem;min-width:1.5rem">#${i+1}</span>
+      <span class="degree">${n.degree}</span>
+      <span class="label">${escapeHtml(n.label)}</span>
+      <span class="meta">${n.file_type}</span>
+    </div>
+  `).join('');
+}
+
+function renderCommunities(communities) {
+  const el = document.getElementById('communityList');
+  if (!communities.length) {
+    el.innerHTML = '<div class="loading">No data</div>';
+    return;
+  }
+  el.innerHTML = communities.slice(0, 30).map(c => `
+    <div class="community-item">
+      <span class="cid">C${c.id}</span>
+      <div class="info">
+        <span class="count">${c.node_count} nodes</span>
+        <div class="samples">${c.sample_labels.join(' · ')}</div>
+      </div>
+    </div>
+  `).join('');
+}
+
+function switchProject(project, btn) {
+  currentProject = project;
+  document.querySelectorAll('.project-btn').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  loadProjectData(project);
+}
+
+function switchTab(tab, btn) {
+  ['overview', 'graph', 'nodes', 'communities'].forEach(t => {
+    document.getElementById('tab' + t.charAt(0).toUpperCase() + t.slice(1)).style.display = t === tab ? '' : 'none';
+  });
+  document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  if (tab === 'graph') {
+    document.getElementById('graphFrame').src = `/api/graph/${currentProject}/html`;
+  }
+}
+
+function escapeHtml(s) {
+  if (!s) return '';
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+// Start
+loadStats();
+</script>
+</body>
+</html>

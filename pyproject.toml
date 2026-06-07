@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "ensemble-llm-wiki"
+version = "1.0.0"
+description = "Turn documents (PDF, EPUB, Markdown, TXT) into an AI-queryable wiki with a knowledge graph"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+dependencies = [
+    "PyYAML>=6.0,<7.0",
+    "python-dateutil>=2.8.0",
+    "requests>=2.28.0",
+    "PyMuPDF>=1.23.0,<2.0",
+    "pytesseract>=0.3.10,<1.0",
+    "Pillow>=10.0.0,<12.0",
+    "pdf2image>=1.16.0",
+    "EbookLib>=0.18,<1.0",
+    "beautifulsoup4>=4.12.0,<5.0",
+    "lxml>=4.9.0",
+    "graphifyy>=0.8.0",
+]
+
+[project.optional-dependencies]
+embed = ["fastembed>=0.3.0"]
+chinese = ["jieba>=0.42,<1.0"]
+all = ["fastembed>=0.3.0", "jieba>=0.42,<1.0"]
+
+[project.scripts]
+kb = "kbcli:main"
+
+[tool.setuptools.packages.find]
+where = ["builder/src"]
+
+[tool.setuptools.package-dir]
+"" = "builder/src"

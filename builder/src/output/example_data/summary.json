@@ -1,0 +1,13 @@
+{
+  "name": "example",
+  "total_pages": 1,
+  "base_url": "https://example.com",
+  "llms_txt_detected": false,
+  "llms_txt_variant": null,
+  "pages": [
+    {
+      "title": "Example Domain",
+      "url": "https://example.com"
+    }
+  ]
+}
