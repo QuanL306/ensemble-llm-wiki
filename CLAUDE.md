@@ -23,7 +23,14 @@ export GEMINI_API_KEY=AIza...        # global
 # export MOONSHOT_API_KEY=...        # Kimi — China
 # export ZHIPU_API_KEY=...           # Zhipu GLM — China
 # export MINIMAX_API_KEY=...         # MiniMax — China
+
+# Optional: if graphify is installed in a venv that isn't on PATH, point kb at it:
+# export KB_PYTHON=/path/to/venv/bin/python3
 ```
+
+> **Note:** `kb add` creates **symlinks** into `raw/` by default (no file copying).
+> This saves disk space when your source files live outside the KB directory.
+> Symlinks work on macOS/Linux; on Windows use WSL or copy files manually.
 
 ---
 
@@ -249,6 +256,9 @@ my-kb/
 | PDF text is garbled / empty | Scanned PDF, no OCR | `brew install tesseract poppler` |
 | `kb` command not found | Not on PATH | `export PATH="$PATH:/path/to/ensemble-llm-wiki"` |
 | `kb graphify` fails silently | graphify not installed | `pip install graphifyy` |
+| `kb graphify` — `no LLM API key found` | Key not exported to subprocess | Pass key explicitly: `DEEPSEEK_API_KEY=sk-... kb graphify` |
+| `kb graphify` — `UnicodeDecodeError` on chi_sim OCR probe | Chinese tesseract lang pack missing | `brew install tesseract-lang` (macOS) or `apt install tesseract-ocr-chi-sim` (Linux) |
+| `compile-llm` fails with `edges.jsonl not found` | Newer graphify outputs `graph.json` only | Generate edges manually — see `graphify_integration.py` or run `kb graphify` again |
 | `kb add` skips compile | graphify hasn't run yet | Run `kb graphify` first, or use `--skip-graphify-check` |
 | Registry out of sync | Manual file edits | `kb clean` to remove stale entries |
 | MCP server finds no documents | compile-llm not run | Run `kb compile-llm` before starting server |
