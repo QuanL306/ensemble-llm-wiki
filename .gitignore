@@ -25,5 +25,6 @@ wiki/graphify-out/
 # Knowledge bases should be initialized outside this repo (e.g. ~/my-research).
 raw/
 
-# Private dev journal — keep local, never publish
+# Private dev files — keep local, never publish
 docs/DEV_LOG.md
+docs/AUDIT.md
