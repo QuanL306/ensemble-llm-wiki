@@ -87,16 +87,15 @@ kb add ~/Downloads/article.md                # MD → compile-first
 kb add ~/Downloads/*.pdf --yes              # batch mode, no prompt
 
 # The 'add' command automatically:
-#   1. Copies file into raw/
+#   1. Symlinks the file into raw/ (no copying — saves disk space)
 #   2. Detects optimal pipeline (graphify-first for PDF, compile-first for MD)
 #   3. Runs ingest → compile-llm → graphify in the correct order
 
 # Manual control (if you prefer step-by-step):
-#   Copy files to raw/ yourself
-cp ~/Downloads/*.pdf raw/books/
+#   Symlink or copy files to raw/ yourself, then run stages individually:
 kb ingest                          # extract and index
+kb graphify                        # build knowledge graph (requires LLM API key)
 kb compile-llm --docs              # LLM writes wiki articles
-kb graphify                        # build knowledge graph
 
 # Open ~/my-research in Obsidian to explore
 ```
@@ -201,10 +200,9 @@ cd ~/my-kb
 kb add new-paper.pdf new-essay.md --yes
 
 # Or step-by-step for fine control
-cp new-paper.pdf raw/books/
 kb ingest                         # incremental — only processes new files
+kb graphify                       # update knowledge graph (requires LLM API key)
 kb compile-llm --docs             # skips already-compiled documents
-kb graphify                       # update knowledge graph
 
 # Check health
 kb lint
