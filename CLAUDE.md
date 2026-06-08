@@ -190,6 +190,17 @@ kb search "transformer attention mechanism"
 kb search "RLHF" --limit 10
 ```
 
+### Dashboard (web UI — optional)
+
+```bash
+python3 dashboard/app.py
+# then open http://127.0.0.1:8765
+```
+
+Provides: stats cards, god-nodes panel (highest-degree entities), community detection,
+and a full interactive `graph.html` viewer. Reads `wiki/graphify-out/` automatically —
+no extra configuration needed.
+
 ---
 
 ## 7. Programmatic API
