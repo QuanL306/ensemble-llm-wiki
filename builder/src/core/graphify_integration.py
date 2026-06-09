@@ -17,6 +17,8 @@ Usage:
   python3 ingest_and_graph.py --input ./docs-scrape/ --project api-docs --mode deep
   python3 ingest_and_graph.py --input ./skill-seekers-output/ --project live-kb --watch
 """
+from __future__ import annotations
+
 import argparse
 import json
 import subprocess

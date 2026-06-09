@@ -619,7 +619,9 @@ def cmd_graphify(args):
         print("❌ Error: Knowledge base config not found (.kbaconfig)")
         return
 
-    from core.graphify_integration import run_graphify
+    from core.graphify_integration import (
+        run_graphify, generate_jsonld, split_edges, tag_edge_provenance,
+    )
 
     wiki_dir = os.path.join(kb_path, "wiki")
     if not os.path.isdir(wiki_dir):
@@ -632,7 +634,7 @@ def cmd_graphify(args):
     # Priority: _articles (LLM-compiled) > raw wiki/ (pre-compile fallback)
     wiki_path = Path(wiki_dir)
     articles_dir = wiki_path / "_articles"
-    if articles_dir.is_dir() and any(articles_dir.iterdir()):
+    if articles_dir.is_dir() and any(articles_dir.glob("*.md")):
         graphify_input = articles_dir
     else:
         # Pre-compile fallback: no articles yet, run on full wiki/ so the
@@ -646,9 +648,23 @@ def cmd_graphify(args):
     print(f"🔍 Building knowledge graph from: {graphify_input}")
     ok = run_graphify(graphify_input, "standard", output_dir=graphify_output)
     if ok:
+        # Post-processing: generate edges, JSON-LD, and provenance
+        # (these always read/write wiki/graphify-out/ — the canonical output dir)
+        graph_json = wiki_path / "graphify-out" / "graph.json"
+        graph_out_dir = wiki_path / "graphify-out"
+        config = load_config(kb_path) or {}
+        kb_name = config.get("name", os.path.basename(kb_path))
+
+        if graph_json.exists():
+            generate_jsonld(graph_json, graph_out_dir / "graph.jsonld", kb_name)
+            split_edges(graph_json, graph_out_dir)
+            if graphify_input.is_dir():
+                counts = tag_edge_provenance(graph_json, graphify_input)
+                print(f"   Provenance: {counts.get('extracted',0)} extracted · "
+                      f"{counts.get('inferred',0)} inferred · {counts.get('ambiguous',0)} ambiguous")
+
         print("✅ Graphify complete.")
-        graph_out = os.path.join(wiki_dir, "graphify-out")
-        print(f"   Output: {graph_out}/")
+        print(f"   Output: {graph_out_dir}/")
         print_kb_status(kb_path)
     else:
         print("❌ Graphify failed. Check that graphify is installed: pip install graphifyy")

@@ -173,16 +173,18 @@ python3 local-server/src/server.py --kb-path ~/my-kb
 python3 local-server/src/server.py --kb-root ~/knowledge-bases
 ```
 
-Available MCP tools:
+Available MCP tools (local server):
 
 | Tool | Purpose |
 |------|---------|
-| `kb_list` | List all available knowledge bases |
+| `kb_list` | List all available knowledge bases (local server only) |
 | `kb_list_docs` | List all documents in a KB with metadata |
 | `kb_query` | Natural-language query with LLM synthesis |
 | `kb_search` | Keyword search against the index |
 | `kb_get_document` | Retrieve a specific wiki article |
 | `kb_save_synthesis` | Save a generated synthesis back into the KB |
+
+The cloud HTTP server (`cloud_platform/`) exposes the same read tools plus write-back tools: `kb_write_article`, `kb_append_note`, `kb_update_index`. See `cloud_platform/README.md` for the full cloud tool reference.
 
 For quick CLI search without starting the server:
 
