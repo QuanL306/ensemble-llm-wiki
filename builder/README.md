@@ -356,4 +356,4 @@ Set any supported LLM API key before running `compile-llm` — see [LLM API Key 
 
 ## License
 
-MIT License — Version 1.2.0
+MIT License

@@ -103,12 +103,22 @@ wiki/_meta/file_index.json
 
 Headless wrapper for cron/auto-sync. For interactive workflows, use `graphify --mcp` directly.
 
-Powered by [**safishamsi/graphify**](https://github.com/safishamsi/graphify) — turns raw content into knowledge graphs with community detection. Adds three post-processing steps not provided by Graphify natively:
+Powered by [**safishamsi/graphify**](https://github.com/safishamsi/graphify) — turns raw content into knowledge graphs with community detection. `run_graphify()` always runs two stages:
+
+1. **`graphify extract`** — semantic extraction; produces `graph.json`
+2. **`graphify cluster-only`** — community clustering; produces `graph.html` (required by the dashboard)
+
+Input targeting: uses `wiki/_articles/` when compiled articles exist (post-`compile-llm`), falling back to `wiki/` pre-compile. Output always written to `wiki/graphify-out/`.
+
+Adds three post-processing steps not provided by Graphify natively:
 
 ```
-Skill Seekers output / raw/ directory
+wiki/_articles/  (or wiki/ pre-compile)
     │
-    ▼ run_graphify()  →  graph.json + graph.html
+    ▼ graphify extract  →  graph.json
+    ▼ graphify cluster-only  →  graph.html
+    │
+    ▼ run_graphify() post-processing:
     │
     ├── generate_jsonld()  →  graph.jsonld (Schema.org)
     │

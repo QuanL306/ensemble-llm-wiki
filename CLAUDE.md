@@ -83,12 +83,13 @@ ingest → graphify → compile-llm → graphify (2nd pass, optional)
 
 **Why this order:**
 1. **ingest** — extract raw text from the document into `wiki/`
-2. **graphify** — build an initial knowledge graph from the raw extracted text;
-   discovers entity relationships even before LLM processing
+2. **graphify** — two stages run automatically:
+   - `extract` — builds `graph.json` from raw text; discovers entity relationships before LLM
+   - `cluster-only` — clusters communities and generates `graph.html` (required by the dashboard)
 3. **compile-llm** — LLM writes the wiki article with graph context injected
    (related works, relationship types); produces richer cross-references
-4. **graphify (2nd pass)** — re-runs on the LLM-compiled articles which now contain
-   `[[wikilinks]]`; produces higher-confidence edges than the raw-text pass
+4. **graphify (2nd pass)** — re-runs on `wiki/_articles/` (LLM-compiled articles with `[[wikilinks]]`);
+   produces higher-confidence edges than the raw-text pass; also regenerates `graph.html`
 
 The 2nd graphify pass is controlled by `.kbaconfig`:
 
@@ -136,11 +137,11 @@ pipeline:
 ```bash
 # Copy files into raw/ yourself, then:
 kb ingest                    # extract text from all new/changed files in raw/
-kb graphify                  # build knowledge graph from wiki/
+kb graphify                  # build knowledge graph (targets _articles/ post-compile, wiki/ pre-compile)
 kb compile-llm --docs        # LLM writes one wiki article per document
 kb compile-llm --index       # rebuild _index.md
 kb compile-llm --concepts    # generate concept pages for [[wikilinks]]
-kb graphify                  # 2nd pass after compile (picks up wikilinks)
+kb graphify                  # 2nd pass after compile (targets _articles/, picks up wikilinks)
 
 # Force recompile everything:
 kb compile-llm --full --yes
@@ -269,7 +270,7 @@ my-kb/
 | `kb graphify` fails silently | graphify not installed | `pip install graphifyy` |
 | `kb graphify` — `no LLM API key found` | Key not exported to subprocess | Pass key explicitly: `DEEPSEEK_API_KEY=sk-... kb graphify` |
 | `kb graphify` — `UnicodeDecodeError` on chi_sim OCR probe | Chinese tesseract lang pack missing | `brew install tesseract-lang` (macOS) or `apt install tesseract-ocr-chi-sim` (Linux) |
-| `compile-llm` fails with `edges.jsonl not found` | Newer graphify outputs `graph.json` only | Generate edges manually — see `graphify_integration.py` or run `kb graphify` again |
+| Dashboard shows `graph.html not found` | `kb graphify` not run after compile-llm | Run `kb graphify` — it now generates `graph.html` automatically via `cluster-only` |
 | `kb add` skips compile | graphify hasn't run yet | Run `kb graphify` first, or use `--skip-graphify-check` |
 | Registry out of sync | Manual file edits | `kb clean` to remove stale entries |
 | MCP server finds no documents | compile-llm not run | Run `kb compile-llm` before starting server |
