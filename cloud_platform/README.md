@@ -236,17 +236,18 @@ Response includes a synthesised answer (if any LLM API key is set) followed by r
 -d '{"name": "kb_get_document", "arguments": {"doc_id": "why_we_sleep"}}'
 ```
 
-#### `kb_get_summary` — Document Metadata
+#### `kb_list_docs` — Browse Documents
 
 ```bash
--d '{"name": "kb_get_summary", "arguments": {"doc_id": "why_we_sleep"}}'
+-d '{"name": "kb_list_docs", "arguments": {}}'
 ```
 
-#### `kb_list_concepts` / `kb_get_concept`
+Returns all documents with confidence tier, lifecycle state, and contradiction flags.
+
+#### `kb_list` — KB Overview
 
 ```bash
--d '{"name": "kb_list_concepts", "arguments": {}}'
--d '{"name": "kb_get_concept", "arguments": {"concept": "hippocampal replay"}}'
+-d '{"name": "kb_list", "arguments": {}}'
 ```
 
 #### `kb_write_article` — Create or Overwrite an Article
@@ -282,6 +283,21 @@ Response includes a synthesised answer (if any LLM API key is set) followed by r
 ```bash
 -d '{"name": "kb_update_index", "arguments": {"content": "# My KB\n\n..."}}'
 ```
+
+#### `kb_save_synthesis` — Save a Query Answer
+
+```bash
+-d '{
+  "name": "kb_save_synthesis",
+  "arguments": {
+    "question": "How does sleep affect memory?",
+    "answer": "Sleep consolidates memories during slow-wave sleep...",
+    "sources": ["why_we_sleep", "huberman_lab_notes"]
+  }
+}'
+```
+
+Saves the answer as `wiki/syntheses/<slug>.md`. Syntheses are searchable via `kb_query` and `kb_search`.
 
 ---
 
@@ -403,4 +419,4 @@ MCP_SERVER_PORT=8001
 
 ## License
 
-MIT License — Version 1.2.0
+MIT License

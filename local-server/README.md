@@ -9,7 +9,7 @@ Access your knowledge base via the MCP protocol in AI clients like Claude Deskto
 - **Inline synthesis**: `kb_query` returns a direct synthesised answer (when any LLM API key is set) plus source list — one tool call instead of three
 - **Chapter-level retrieval**: chunk scoring surfaces the most relevant section of a book, not just the book title
 - **Semantic-style scoring**: matches queries against LLM-generated retrieval sentences, not just raw keywords
-- **Write-back tools**: AI can file articles, notes, and index updates back into the wiki
+- **Save syntheses**: AI can save generated answers back into the wiki as permanent pages
 - Local-only — knowledge never leaves your machine
 
 ## Setup
@@ -112,7 +112,16 @@ Edit `~/.cursor/mcp.json`:
 
 ## Available Tools
 
-### Retrieval Tools
+| Tool | Description |
+|------|-------------|
+| `kb_query` | Natural-language question → synthesised answer + ranked sources |
+| `kb_search` | Keyword search with confidence tier + lifecycle display |
+| `kb_list_docs` | Browse all documents with ★★★/★★☆/★☆☆ confidence + verified count |
+| `kb_get_document` | Full wiki article by doc ID |
+| `kb_list` | KB overview with document/verified/concept counts |
+| `kb_save_synthesis` | Save a generated answer as a permanent `wiki/syntheses/` page |
+
+---
 
 #### `kb_query` — Natural Language Question ⭐
 
@@ -138,11 +147,7 @@ The process requires 7–9 hours for full consolidation (Huberman Lab Notes).
 
 ## Why We Sleep
 *Most relevant section: Chapter 6: Your Mother and Shakespeare*
-Sleep is the single most effective thing we can do to reset our brain and body
-health each day...
 Relevance: 47
-
-## Huberman Lab Notes
 ...
 ```
 
@@ -163,7 +168,17 @@ Relevance: 47
 { "name": "kb_search", "arguments": { "query": "machine learning", "limit": 5 } }
 ```
 
-Returns ranked documents with word count and best matching chapter (for long documents).
+Returns ranked documents with confidence tier and lifecycle state per result.
+
+---
+
+#### `kb_list_docs` — Browse Documents
+
+```json
+{ "name": "kb_list_docs", "arguments": {} }
+```
+
+Returns all documents with ★★★/★★☆/★☆☆ confidence tier, lifecycle state, and ⚠️ contradiction flags.
 
 ---
 
@@ -173,96 +188,34 @@ Returns ranked documents with word count and best matching chapter (for long doc
 { "name": "kb_get_document", "arguments": { "doc_id": "why_we_sleep" } }
 ```
 
-Returns the full compiled wiki article.
+Returns the full compiled wiki article with optional section extraction.
 
 ---
 
-#### `kb_get_summary` — Document Metadata
+#### `kb_list` — KB Overview
 
 ```json
-{ "name": "kb_get_summary", "arguments": { "doc_id": "why_we_sleep" } }
+{ "name": "kb_list", "arguments": {} }
 ```
 
-Returns word count, core claims, key data, and notable quotes from the index (no file I/O).
+Returns document count, verified count, and concept count for the KB.
 
 ---
 
-#### `kb_list_concepts` — Browse Concepts
-
-```json
-{ "name": "kb_list_concepts", "arguments": {} }
-```
-
----
-
-#### `kb_get_concept` — Concept Detail
-
-```json
-{ "name": "kb_get_concept", "arguments": { "concept": "hippocampal replay" } }
-```
-
----
-
-#### `kb_stats` — Knowledge Base Statistics
-
-```json
-{ "name": "kb_stats", "arguments": {} }
-```
-
-Returns document counts, concept counts, and available resource URIs.
-
----
-
-### Write-back Tools
-
-These allow the AI to file research outputs directly into the wiki — no copy-paste needed.
-
-#### `kb_write_article` — Create or Overwrite a Wiki Article
+#### `kb_save_synthesis` — Save a Query Answer
 
 ```json
 {
-  "name": "kb_write_article",
+  "name": "kb_save_synthesis",
   "arguments": {
-    "title": "Sleep and Memory — Synthesis",
-    "content": "---\ntitle: Sleep and Memory — Synthesis\n...\n",
-    "overwrite": false
+    "question": "What is the relationship between stress and learning?",
+    "answer": "Chronic stress impairs hippocampal neurogenesis...",
+    "sources": ["why_we_sleep", "stress_response_review"]
   }
 }
 ```
 
-Creates `wiki/_articles/sleep_and_memory_synthesis.md`. If the file already exists, returns an error unless `overwrite: true`.
-
----
-
-#### `kb_append_note` — Add a Timestamped Note to an Article
-
-```json
-{
-  "name": "kb_append_note",
-  "arguments": {
-    "doc_id": "why_we_sleep",
-    "note": "Contradicts Polyphasic Sleep Handbook's claim about 4-hour cycles.",
-    "section": "Research Notes"
-  }
-}
-```
-
-Appends under `## Research Notes` (creates the section if absent). Entry is timestamped `YYYY-MM-DD HH:MM`.
-
----
-
-#### `kb_update_index` — Rewrite `_index.md`
-
-```json
-{
-  "name": "kb_update_index",
-  "arguments": {
-    "content": "# My Research KB\n\n## Topic Map\n..."
-  }
-}
-```
-
-Overwrites `wiki/_index.md` entirely.
+Saves the answer as `wiki/syntheses/<slug>.md` with YAML frontmatter. Syntheses are searchable alongside compiled articles via `kb_query` and `kb_search`, creating a compounding knowledge growth loop.
 
 ---
 
@@ -282,49 +235,33 @@ AI:
 
   *Sources: Why We Sleep, Stress Response Review, Huberman Lab Notes*
 
-  ---
-  [detailed source list with chapter-level hits]
-
-You: Save a synthesis note on this topic.
+You: Save that as a synthesis.
 
 AI:
-  → calls kb_write_article(title="Stress and Learning — Synthesis", content="...")
-  Article written: wiki/_articles/stress_and_learning_synthesis.md (312 words)
+  → calls kb_save_synthesis(question="...", answer="...", sources=[...])
+  Saved: wiki/syntheses/stress_and_learning.md
 ```
-
----
-
-## Resources Exposed
-
-| URI | Content |
-|-----|---------|
-| `kb://<kb_id>/index` | `_index.md` |
-| `kb://<kb_id>/articles/<name>` | Individual wiki article |
 
 ---
 
 ## Architecture
 
 ```
-AI Client (Claude Desktop / Cursor)
+AI Client (Claude Desktop / Cursor / Cline)
     │
     │  MCP stdio transport
     ▼
 KnowledgeBaseMCPServer
     │
-    ├── kb_query ──────── file_index.json (scoring)
+    ├── kb_query ──────── file_index.json + embeddings.json (hybrid scoring)
     │                 └── wiki/_articles/*.md (snippets)
     │                 └── LLM synthesis via any configured provider (optional)
     │
-    ├── kb_get_summary ─── file_index.json (metadata)
-    ├── kb_list_concepts ── concepts.json
-    ├── kb_get_concept ──── concepts.json
-    ├── kb_stats ────────── file_index.json + concepts.json
     ├── kb_search ──────── file_index.json
+    ├── kb_list_docs ───── file_index.json (confidence + lifecycle)
     ├── kb_get_document ── wiki/_articles/*.md
-    ├── kb_write_article ─ wiki/_articles/ (write)
-    ├── kb_append_note ─── wiki/_articles/ (append)
-    └── kb_update_index ── wiki/_index.md (write)
+    ├── kb_list ────────── file_index.json (counts)
+    └── kb_save_synthesis ─ wiki/syntheses/ (write)
 ```
 
 ---
@@ -359,4 +296,4 @@ KnowledgeBaseMCPServer
 
 ## License
 
-MIT License — Version 1.2.0
+MIT License

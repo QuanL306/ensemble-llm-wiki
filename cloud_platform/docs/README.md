@@ -37,14 +37,14 @@ curl -X POST https://your-server/mcp/v1/tools/call \
 | Tool | What it does |
 |------|-------------|
 | `kb_query` | Natural language question → synthesised answer + ranked sources |
-| `kb_search` | Keyword search → ranked document list with chapter hints |
+| `kb_search` | Keyword search → ranked document list with confidence tier |
+| `kb_list_docs` | Browse all documents with confidence + lifecycle state |
 | `kb_get_document` | Full wiki article by doc ID |
-| `kb_get_summary` | Document metadata (word count, claims, data, quotes) |
-| `kb_list_concepts` | All concept names |
-| `kb_get_concept` | Concept definition + source list |
+| `kb_list` | KB overview with document/verified/concept counts |
 | `kb_write_article` | Create or overwrite a wiki article |
 | `kb_append_note` | Append a timestamped note to an existing article |
 | `kb_update_index` | Rewrite the wiki index |
+| `kb_save_synthesis` | Save a query answer as a permanent wiki synthesis page |
 
 ### Headers
 
@@ -57,4 +57,4 @@ curl -X POST https://your-server/mcp/v1/tools/call \
 ### Developer Guide
 
 - [Full API Reference](DEVELOPER_GUIDE.md)
-- [Architecture](../docs/ARCHITECTURE.md) — System design, security model, retrieval design
+- [Architecture](../../docs/ARCHITECTURE.md) — System design, security model, retrieval design
