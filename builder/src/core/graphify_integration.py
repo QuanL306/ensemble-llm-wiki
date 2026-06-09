@@ -43,13 +43,19 @@ def find_graphify_python() -> str:
 
 
 def run_graphify(input_dir: Path, mode: str = "standard", python: str = "") -> bool:
-    """Run graphify full pipeline on input directory"""
+    """Run graphify full pipeline on input directory.
+
+    Runs two stages:
+      1. graphify extract  — builds graph.json from source files
+      2. graphify cluster-only — clusters communities and generates graph.html
+         (required by the dashboard; silently missing if only extract is run)
+    """
     if not python:
         python = find_graphify_python()
-    # graphify extract: https://github.com/safishamsi/graphify
+
+    # Stage 1: extract
     cmd = [python, "-m", "graphify", "extract", str(input_dir)]
     print(f"🔍 Running: {' '.join(cmd)}")
-    
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
         if result.returncode != 0:
@@ -57,13 +63,30 @@ def run_graphify(input_dir: Path, mode: str = "standard", python: str = "") -> b
             print(result.stderr[-500:], file=sys.stderr)
             return False
         print(result.stdout[-1000:])
-        return True
     except subprocess.TimeoutExpired:
-        print("❌ graphify timed out (>10min)", file=sys.stderr)
+        print("❌ graphify extract timed out (>10min)", file=sys.stderr)
         return False
     except Exception as e:
-        print(f"❌ graphify failed: {e}", file=sys.stderr)
+        print(f"❌ graphify extract failed: {e}", file=sys.stderr)
         return False
+
+    # Stage 2: cluster-only — generates graph.html for the dashboard
+    cmd2 = [python, "-m", "graphify", "cluster-only", str(input_dir)]
+    print(f"🔍 Running: {' '.join(cmd2)}")
+    try:
+        result2 = subprocess.run(cmd2, capture_output=True, text=True, timeout=300)
+        if result2.returncode != 0:
+            print(f"⚠️ graphify cluster-only returned non-zero: {result2.returncode}", file=sys.stderr)
+            print(result2.stderr[-300:], file=sys.stderr)
+            # Non-fatal: extract succeeded, graph.json is valid; just no graph.html
+        else:
+            print(result2.stdout[-500:])
+    except subprocess.TimeoutExpired:
+        print("⚠️ graphify cluster-only timed out — graph.html not generated", file=sys.stderr)
+    except Exception as e:
+        print(f"⚠️ graphify cluster-only failed: {e}", file=sys.stderr)
+
+    return True
 
 
 def generate_jsonld(graph_file: Path, output_file: Path, project_name: str):
