@@ -626,8 +626,22 @@ def cmd_graphify(args):
         print("❌ wiki/ not found. Run ingest + compile first.")
         return
 
-    print(f"🔍 Building knowledge graph from: {wiki_dir}")
-    ok = run_graphify(Path(wiki_dir), "standard")
+    # Pass only compiled content dirs to graphify — exclude _meta/, graphify-out/,
+    # syntheses/ etc. so internal JSON indexes (file_index.json, hashes, paths)
+    # don't pollute the knowledge graph with noise nodes.
+    # Priority: _articles (LLM-compiled) > raw wiki/ (pre-compile fallback)
+    wiki_path = Path(wiki_dir)
+    articles_dir = wiki_path / "_articles"
+    if articles_dir.is_dir() and any(articles_dir.iterdir()):
+        graphify_input = articles_dir
+    else:
+        # Pre-compile fallback: no articles yet, run on full wiki/ so the
+        # graphify-first pipeline can still build an initial graph from raw text.
+        # _meta/ noise is expected at this stage.
+        graphify_input = wiki_path
+
+    print(f"🔍 Building knowledge graph from: {graphify_input}")
+    ok = run_graphify(graphify_input, "standard")
     if ok:
         print("✅ Graphify complete.")
         graph_out = os.path.join(wiki_dir, "graphify-out")
