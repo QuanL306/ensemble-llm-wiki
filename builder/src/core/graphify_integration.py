@@ -42,19 +42,26 @@ def find_graphify_python() -> str:
     sys.exit(1)
 
 
-def run_graphify(input_dir: Path, mode: str = "standard", python: str = "") -> bool:
+def run_graphify(input_dir: Path, mode: str = "standard", python: str = "",
+                 output_dir: Path | None = None) -> bool:
     """Run graphify full pipeline on input directory.
 
     Runs two stages:
       1. graphify extract  — builds graph.json from source files
       2. graphify cluster-only — clusters communities and generates graph.html
          (required by the dashboard; silently missing if only extract is run)
+
+    output_dir: where to write graphify-out/. Defaults to input_dir/graphify-out.
+                Pass wiki/ root so output always lands in wiki/graphify-out/
+                regardless of whether input_dir is _articles/ or wiki/.
     """
     if not python:
         python = find_graphify_python()
 
     # Stage 1: extract
     cmd = [python, "-m", "graphify", "extract", str(input_dir)]
+    if output_dir:
+        cmd += ["--out", str(output_dir)]
     print(f"🔍 Running: {' '.join(cmd)}")
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
@@ -71,7 +78,9 @@ def run_graphify(input_dir: Path, mode: str = "standard", python: str = "") -> b
         return False
 
     # Stage 2: cluster-only — generates graph.html for the dashboard
-    cmd2 = [python, "-m", "graphify", "cluster-only", str(input_dir)]
+    # Point at the actual output dir so it reads the graph.json we just wrote.
+    cluster_target = output_dir if output_dir else input_dir
+    cmd2 = [python, "-m", "graphify", "cluster-only", str(cluster_target)]
     print(f"🔍 Running: {' '.join(cmd2)}")
     try:
         result2 = subprocess.run(cmd2, capture_output=True, text=True, timeout=300)

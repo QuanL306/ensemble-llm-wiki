@@ -640,8 +640,11 @@ def cmd_graphify(args):
         # _meta/ noise is expected at this stage.
         graphify_input = wiki_path
 
+    # Always write output to wiki/graphify-out/ regardless of input dir,
+    # so the dashboard can find it at the canonical location.
+    graphify_output = wiki_path
     print(f"🔍 Building knowledge graph from: {graphify_input}")
-    ok = run_graphify(graphify_input, "standard")
+    ok = run_graphify(graphify_input, "standard", output_dir=graphify_output)
     if ok:
         print("✅ Graphify complete.")
         graph_out = os.path.join(wiki_dir, "graphify-out")
