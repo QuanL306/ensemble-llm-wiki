@@ -2,7 +2,7 @@
 
 A complete ecosystem for building, accessing, and sharing knowledge with AI — from any source. Integrates Skill Seekers, Graphify, LLM compilation, confidence scoring, and multi-tenant cloud serving.
 
-**Original design inspiration:** Karpathy's LLM Wiki (interlinked markdown knowledge base pattern for AI consumption).
+**Original design inspiration:** [Karpathy's LLM Wiki concept](https://github.com/Pratiyush/llm-wiki) (interlinked markdown knowledge base pattern for AI consumption).
 
 ## Architecture
 
@@ -56,19 +56,19 @@ The Builder wrappers (`skill_seekers.py`, `graphify_integration.py`) exist for h
 | Module | Borrowed from | What it does |
 |--------|--------------|-------------|
 | `ingest.py` | — | PDF/EPUB/MD → extracted text + metadata |
-| `graphify_integration.py` | **safishamsi/graphify** | Headless wrapper: subprocess → Graphify + JSON-LD + dual edges |
+| `graphify_integration.py` | [safishamsi/graphify](https://github.com/safishamsi/graphify) | Headless wrapper: subprocess → Graphify + JSON-LD + dual edges |
 | `compiler.py` | — | LLM/wiki compilation |
 | `scoring.py` | — | Hybrid retrieval: TF-IDF + embeddings |
-| `skill_seekers.py` | **yusufkaraaslan/Skill_Seekers** | Headless wrapper: subprocess → fetch docs/repos/video |
-| `confidence.py` | **Pratiyush/llm-wiki** | 4-factor scoring: source count/quality/recency/cross-refs |
-| `exports.py` | **Pratiyush/llm-wiki** | `llms.txt` + `llms-full.txt` + `overview.md` |
-| `contradictions.py` | **SamurAIGPT/llm-wiki-agent** | Ingest-time negation pair detection |
-| `lifecycle.py` | **Pratiyush/llm-wiki** | 5-state: draft→reviewed→verified→stale→archived |
-| `foundations.py` | **OmegaWiki** | Terminal pages: receive links, never emit |
-| `entity_types.py` | **OmegaWiki** | Extended types: methods/ + topics/ |
-| `session_start.py` | **ekadetov+Pratiyush** | Auto-sync: changed files → full 6-step pipeline |
+| `skill_seekers.py` | [yusufkaraaslan/Skill_Seekers](https://github.com/yusufkaraaslan/Skill_Seekers) | Headless wrapper: subprocess → fetch docs/repos/video |
+| `confidence.py` | [Pratiyush/llm-wiki](https://github.com/Pratiyush/llm-wiki) | 4-factor scoring: source count/quality/recency/cross-refs |
+| `exports.py` | [Pratiyush/llm-wiki](https://github.com/Pratiyush/llm-wiki) | `llms.txt` + `llms-full.txt` + `overview.md` |
+| `contradictions.py` | [SamurAIGPT/llm-wiki-agent](https://github.com/SamurAIGPT/llm-wiki-agent) | Ingest-time negation pair detection |
+| `lifecycle.py` | [Pratiyush/llm-wiki](https://github.com/Pratiyush/llm-wiki) | 5-state: draft→reviewed→verified→stale→archived |
+| `foundations.py` | [OmegaWiki](https://github.com/OmegaWiki/OmegaWiki) | Terminal pages: receive links, never emit |
+| `entity_types.py` | [OmegaWiki](https://github.com/OmegaWiki/OmegaWiki) | Extended types: methods/ + topics/ |
+| `session_start.py` | [ekadetov/llm-wiki](https://github.com/ekadetov/llm-wiki) + [Pratiyush/llm-wiki](https://github.com/Pratiyush/llm-wiki) | Auto-sync: changed files → full 6-step pipeline |
 | `transcript_harvester.py` | — | Import AI session transcripts (Claude Code, Cursor) into the KB |
-| *Architecture* | **Karpathy/llm-wiki** | Original interlinked markdown KB + AI consumption design |
+| *Architecture* | Karpathy's LLM Wiki pattern | Original interlinked markdown KB + AI consumption design |
 
 ### 2. Local Server — MCP Integration
 
@@ -329,6 +329,20 @@ To skip provenance tagging: `--no-provenance`.
 | Cross-references | 25% | How many other wiki pages link to this one |
 
 Tiers: ★★★ (high, ≥0.8) · ★★☆ (medium, ≥0.6) · ★☆☆ (low, ≥0.4) · --- (unverified)
+
+## Credits
+
+This project builds on the design and ideas of several open-source projects:
+
+| Project | Author | What we borrowed |
+|---------|--------|-----------------|
+| [safishamsi/graphify](https://github.com/safishamsi/graphify) | safishamsi | Knowledge graph construction, community detection, JSON-LD export |
+| [yusufkaraaslan/Skill_Seekers](https://github.com/yusufkaraaslan/Skill_Seekers) | yusufkaraaslan | Multi-source document fetching (docs, repos, video, PDFs) |
+| [Pratiyush/llm-wiki](https://github.com/Pratiyush/llm-wiki) | Pratiyush | Confidence scoring model, lifecycle state machine, llms.txt export |
+| [SamurAIGPT/llm-wiki-agent](https://github.com/SamurAIGPT/llm-wiki-agent) | SamurAIGPT | Ingest-time contradiction detection, overview.md generation |
+| [ekadetov/llm-wiki](https://github.com/ekadetov/llm-wiki) | ekadetov | Session-start auto-sync pattern |
+| [OmegaWiki](https://github.com/OmegaWiki/OmegaWiki) | OmegaWiki | Dual edge system, extended entity type taxonomy |
+| Karpathy's LLM Wiki | Andrej Karpathy | Original concept: interlinked markdown KB purpose-built for AI consumption |
 
 ## License
 

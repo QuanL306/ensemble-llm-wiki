@@ -2,7 +2,7 @@
 
 ## Design Origins
 
-This architecture was originally inspired by **Karpathy's LLM Wiki** — the core pattern of interlinked markdown files as a knowledge base purpose-built for AI consumption. All subsequent enhancements (dual edges from OmegaWiki, confidence scoring from Pratiyush, contradiction detection from SamurAIGPT, SessionStart from ekadetov) are layers built on top of this foundation.
+This architecture was originally inspired by **Karpathy's LLM Wiki** — the core pattern of interlinked markdown files as a knowledge base purpose-built for AI consumption. All subsequent enhancements (dual edges from [OmegaWiki](https://github.com/OmegaWiki/OmegaWiki), confidence scoring from [Pratiyush/llm-wiki](https://github.com/Pratiyush/llm-wiki), contradiction detection from [SamurAIGPT/llm-wiki-agent](https://github.com/SamurAIGPT/llm-wiki-agent), SessionStart from [ekadetov/llm-wiki](https://github.com/ekadetov/llm-wiki)) are layers built on top of this foundation.
 
 ## System Overview
 
@@ -82,7 +82,7 @@ The Builder wrappers (`skill_seekers.py`, `graphify_integration.py`) exist for h
 
 ### Ingestion (`ingest.py`)
 
-Powered by **yusufkaraaslan/Skill_Seekers** — fetches knowledge from 17 source types (docs, repos, video, PDFs, etc.) into the KB's `raw/` directory.
+Powered by [**yusufkaraaslan/Skill_Seekers**](https://github.com/yusufkaraaslan/Skill_Seekers) — fetches knowledge from 17 source types (docs, repos, video, PDFs, etc.) into the KB's `raw/` directory.
 
 ```
 raw/*.pdf / *.epub / *.md
@@ -103,7 +103,7 @@ wiki/_meta/file_index.json
 
 Headless wrapper for cron/auto-sync. For interactive workflows, use `graphify --mcp` directly.
 
-Powered by **safishamsi/graphify** — turns raw content into knowledge graphs with community detection. Adds three post-processing steps not provided by Graphify natively:
+Powered by [**safishamsi/graphify**](https://github.com/safishamsi/graphify) — turns raw content into knowledge graphs with community detection. Adds three post-processing steps not provided by Graphify natively:
 
 ```
 Skill Seekers output / raw/ directory
@@ -119,7 +119,7 @@ Skill Seekers output / raw/ directory
                                   edges_tagged.jsonl
 ```
 
-Borrowed from OmegaWiki's dual edge system — separates pure citation relationships from semantic ones to prevent citation noise from diluting the knowledge graph.
+Borrowed from [OmegaWiki](https://github.com/OmegaWiki/OmegaWiki)'s dual edge system — separates pure citation relationships from semantic ones to prevent citation noise from diluting the knowledge graph.
 
 **Edge provenance tags:** `EXTRACTED` (wikilink `[[…]]` found verbatim in an article), `INFERRED` (LLM-detected semantic relationship), `AMBIGUOUS` (inferred with weight < 0.3). Downstream consumers can filter by tag — e.g. use only `EXTRACTED` edges for a strict citation graph.
 
@@ -148,7 +148,7 @@ Triggered via `python cli.py harvest [--since N] [--sources …]`.
 
 ### Confidence Scoring (`confidence.py`)
 
-4-factor model borrowed from Pratiyush/llm-wiki:
+4-factor model borrowed from [Pratiyush/llm-wiki](https://github.com/Pratiyush/llm-wiki):
 
 | Factor | Weight | Computation |
 |--------|--------|-------------|
@@ -163,7 +163,7 @@ Tiers: ★★★ (≥0.8), ★★☆ (≥0.6), ★☆☆ (≥0.4), --- (<0.4).
 
 ### Lifecycle (`lifecycle.py`)
 
-5-state machine borrowed from Pratiyush/llm-wiki:
+5-state machine borrowed from [Pratiyush/llm-wiki](https://github.com/Pratiyush/llm-wiki):
 
 ```
 draft ──→ reviewed ──→ verified
@@ -184,11 +184,11 @@ Generates after every `compile-llm`:
 - `wiki/llms-full.txt` — flattened plain-text dump (5MB cap)
 - `wiki/overview.md` — living synthesis updated on every compile
 
-Borrowed from Pratiyush/llm-wiki (llms.txt) and SamurAIGPT/llm-wiki-agent (overview.md).
+Borrowed from [Pratiyush/llm-wiki](https://github.com/Pratiyush/llm-wiki) (llms.txt) and [SamurAIGPT/llm-wiki-agent](https://github.com/SamurAIGPT/llm-wiki-agent) (overview.md).
 
 ### Extended Entity Types (`entity_types.py`)
 
-Borrowed from OmegaWiki's 9-entity system. Knowledge-base-suite-en now supports:
+Borrowed from [OmegaWiki](https://github.com/OmegaWiki/OmegaWiki)'s 9-entity system. Knowledge-base-suite-en now supports:
 - `_articles/` — source document summaries
 - `_concepts/` — cross-referenced technical concepts
 - `_methods/` — reusable analytical frameworks (with parent/child chains)
@@ -197,7 +197,7 @@ Borrowed from OmegaWiki's 9-entity system. Knowledge-base-suite-en now supports:
 
 ### Contradiction Detection (`contradictions.py`)
 
-Ingest-time detection borrowed from SamurAIGPT/llm-wiki-agent:
+Ingest-time detection borrowed from [SamurAIGPT/llm-wiki-agent](https://github.com/SamurAIGPT/llm-wiki-agent):
 - Extracts claim-like sentences from new and existing documents
 - Matches negation pairs (increase↔decrease, support↔oppose, etc.)
 - Requires ≥3 shared topic words for a match
