@@ -2,7 +2,7 @@
 
 ## Design Origins
 
-This architecture was originally inspired by **Karpathy's LLM Wiki** — the core pattern of interlinked markdown files as a knowledge base purpose-built for AI consumption. All subsequent enhancements (dual edges from [OmegaWiki](https://github.com/OmegaWiki/OmegaWiki), confidence scoring from [Pratiyush/llm-wiki](https://github.com/Pratiyush/llm-wiki), contradiction detection from [SamurAIGPT/llm-wiki-agent](https://github.com/SamurAIGPT/llm-wiki-agent), SessionStart from [ekadetov/llm-wiki](https://github.com/ekadetov/llm-wiki)) are layers built on top of this foundation.
+This architecture was originally inspired by **Karpathy's LLM Wiki** — the core pattern of interlinked markdown files as a knowledge base purpose-built for AI consumption. All subsequent enhancements (dual edges from [OmegaWiki](https://github.com/boscocerdeira/OmegaWiki), confidence scoring from [Pratiyush/llm-wiki](https://github.com/Pratiyush/llm-wiki), contradiction detection from [SamurAIGPT/llm-wiki-agent](https://github.com/SamurAIGPT/llm-wiki-agent), SessionStart from [ekadetov/llm-wiki](https://github.com/ekadetov/llm-wiki)) are layers built on top of this foundation.
 
 ## System Overview
 
@@ -119,7 +119,7 @@ Skill Seekers output / raw/ directory
                                   edges_tagged.jsonl
 ```
 
-Borrowed from [OmegaWiki](https://github.com/OmegaWiki/OmegaWiki)'s dual edge system — separates pure citation relationships from semantic ones to prevent citation noise from diluting the knowledge graph.
+Borrowed from [OmegaWiki](https://github.com/boscocerdeira/OmegaWiki)'s dual edge system — separates pure citation relationships from semantic ones to prevent citation noise from diluting the knowledge graph.
 
 **Edge provenance tags:** `EXTRACTED` (wikilink `[[…]]` found verbatim in an article), `INFERRED` (LLM-detected semantic relationship), `AMBIGUOUS` (inferred with weight < 0.3). Downstream consumers can filter by tag — e.g. use only `EXTRACTED` edges for a strict citation graph.
 
@@ -188,7 +188,7 @@ Borrowed from [Pratiyush/llm-wiki](https://github.com/Pratiyush/llm-wiki) (llms.
 
 ### Extended Entity Types (`entity_types.py`)
 
-Borrowed from [OmegaWiki](https://github.com/OmegaWiki/OmegaWiki)'s 9-entity system. Knowledge-base-suite-en now supports:
+Borrowed from [OmegaWiki](https://github.com/boscocerdeira/OmegaWiki)'s 9-entity system. Knowledge-base-suite-en now supports:
 - `_articles/` — source document summaries
 - `_concepts/` — cross-referenced technical concepts
 - `_methods/` — reusable analytical frameworks (with parent/child chains)
