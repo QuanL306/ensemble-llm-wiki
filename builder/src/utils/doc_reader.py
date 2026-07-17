@@ -110,37 +110,41 @@ def _extract_pdf(doc_path: str) -> str:
 
     # Detect if scanned — samples beginning, middle, and end pages
     if _is_scanned_pdf(doc_path):
+        # Many "scanned" PDFs actually have an embedded text layer.
+        # Try text layer first; only fall back to OCR if it's genuinely empty.
+        text = _extract_pdf_normal(doc_path)
+        if len(text.strip()) >= 500:
+            return text
         return _extract_pdf_scanned(doc_path)
     else:
         return _extract_pdf_normal(doc_path)
 
 
 def _is_scanned_pdf(doc_path: str, sample_pages: int = 5) -> bool:
-    """Detect if PDF is scanned — samples across beginning, middle, and end.
+    """Detect if PDF is scanned — samples pages starting from page 5 onward.
 
-    Only checking the first few pages misses PDFs where the front matter
-    (title, TOC) is machine-readable but the body is scanned images.
+    Skips front matter (cover, title, copyright, TOC) which is often
+    machine-readable even in scanned books. Uses a 500-char threshold
+    to avoid false positives from sparse pages.
     """
     import fitz
 
     with fitz.open(doc_path) as doc:
         total_pages = len(doc)
 
-        # Choose sample indices spread across the entire document
-        if total_pages <= sample_pages:
+        if total_pages <= 10:
             indices = list(range(total_pages))
         else:
-            step = max(1, (total_pages - 1) // (sample_pages - 1))
-            indices = [i * step for i in range(sample_pages)]
-            # Always include the last page
-            if indices[-1] != total_pages - 1:
-                indices[-1] = total_pages - 1
+            # Start from page 5 (0-indexed), skip front matter
+            start = 5
+            step = max(1, (total_pages - start - 1) // (sample_pages - 1))
+            indices = [min(start + i * step, total_pages - 1) for i in range(sample_pages)]
 
         scanned_count = 0
         for i in indices:
             page = doc[i]
             text = page.get_text().strip()
-            if len(text) < 100:
+            if len(text) < 500:
                 scanned_count += 1
 
     return scanned_count >= (len(indices) // 2 + 1)

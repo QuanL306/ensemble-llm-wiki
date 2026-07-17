@@ -70,21 +70,28 @@ def _split_into_chapters(text: str) -> list:
 
 
 def _compile_document_chaptered(backend, model: str, file_info: dict,
-                                 kb_path: str, max_chapters: int = 16) -> Optional[str]:
+                                 kb_path: str, max_chapters: int = 16,
+                                 graph_context_fn=None, stream_fn=None) -> Optional[str]:
     """Compile a large book chapter-by-chapter, then merge chapter summaries.
-    
+
     Returns None if the book has too few chapters (caller falls back to
     single-pass _compile_document).
+
+    graph_context_fn and stream_fn are optional callbacks that replace
+    the deferred import of cli._build_graph_context / cli._stream_message.
     """
-    # Deferred import — _stream_message lives in cli.py
-    # Use sys.path insert to avoid "attempted relative import beyond top-level package"
-    # when chaptered.py is called from compiler.py in nested import chains.
-    import sys as _sys
-    from pathlib import Path as _Path
-    _src_dir = str(_Path(__file__).resolve().parent.parent)
-    if _src_dir not in _sys.path:
-        _sys.path.insert(0, _src_dir)
-    import cli as _cli
+    # Use provided callbacks, or fall back to deferred import
+    if graph_context_fn is None or stream_fn is None:
+        import sys as _sys
+        from pathlib import Path as _Path
+        _src_dir = str(_Path(__file__).resolve().parent.parent)
+        if _src_dir not in _sys.path:
+            _sys.path.insert(0, _src_dir)
+        import cli as _cli
+        if graph_context_fn is None:
+            graph_context_fn = _cli._build_graph_context
+        if stream_fn is None:
+            stream_fn = _cli._stream_message
 
     name = file_info.get("name", "Unknown")
     name_clean = re.sub(r'\.[^.]+$', '', name)
@@ -215,7 +222,7 @@ def _compile_document_chaptered(backend, model: str, file_info: dict,
     print(f"     merging {len(chapter_summaries)} chapter summaries...", end="", flush=True)
     stem_words = re.sub(r'[_\-. ]', ' ', name_clean).lower().split()
     tag_hint = ", ".join(w for w in stem_words[:4] if len(w) > 3)
-    graph_context = _cli._build_graph_context(file_info, kb_path)
+    graph_context = graph_context_fn(file_info, kb_path)
     merge_prompt = _PROMPT_CHAPTER_MERGE.format(
         name=name,
         name_clean=name_clean,
@@ -226,7 +233,7 @@ def _compile_document_chaptered(backend, model: str, file_info: dict,
         chapter_summaries="\n\n".join(chapter_summaries),
         graph_context=graph_context,
     )
-    result = _cli._stream_message(backend, model, merge_prompt, max_tokens=3000)
+    result = stream_fn(backend, model, merge_prompt, max_tokens=3000)
     print(f" ✅")
     return result
 

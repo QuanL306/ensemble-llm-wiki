@@ -94,25 +94,37 @@ def run_ingest(kb_path: Path, python: str = "python3") -> bool:
 
 
 def run_compile(kb_path: Path, python: str = "python3") -> bool:
-    """Run LLM-powered compilation if any backend API key is available."""
-    # Ensure core modules are importable (same pattern as run_confidence_scoring)
+    """Run LLM compilation via CLI subprocess (same path as ingest)."""
     core_root = Path(__file__).resolve().parent.parent  # builder/src/
-    if str(core_root) not in sys.path:
-        sys.path.insert(0, str(core_root))
+    builder_cli = core_root / "cli.py"
 
-    from core.llm import list_available, detect_backend
-
-    if not list_available():
-        print("[session_start] No LLM API keys — skipping compile-llm")
+    if not builder_cli.exists():
+        print("[session_start] Builder CLI not found, skipping compile-llm", file=sys.stderr)
         return False
 
+    # Check for available backend (still import llm.py for key detection)
+    if str(core_root) not in sys.path:
+        sys.path.insert(0, str(core_root))
     try:
-        from core.compiler import WikiCompiler
-        compiler = WikiCompiler(str(kb_path))
-        result = compiler.compile_with_llm(fallback=True)
-        print(f"[session_start] compile-llm: {result['concepts_total']} concepts, "
-              f"backend={result.get('backend', 'unknown')}")
-        return True
+        from core.llm import list_available
+        if not list_available():
+            print("[session_start] No LLM API keys — skipping compile-llm")
+            return False
+    except Exception:
+        pass  # Let the CLI handle backend detection
+
+    try:
+        result = subprocess.run(
+            [python, str(builder_cli), "compile-llm", "--yes", "--skip-graphify-check"],
+            capture_output=True, text=True, timeout=600,
+            cwd=str(kb_path),
+        )
+        if result.returncode == 0:
+            print("[session_start] compile-llm done")
+            return True
+        else:
+            print(f"[session_start] compile-llm failed: {result.stderr[:200]}")
+            return False
     except Exception as e:
         print(f"[session_start] Compile failed: {e}", file=sys.stderr)
         return False

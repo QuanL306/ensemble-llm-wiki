@@ -192,16 +192,18 @@ async function loadStats() {
 
 function renderStats(data) {
   let html = '';
-  
+
   // KB stats
   const kb = data.knowledge_base || {};
   if (kb.available) {
-    html += `<div class="stat-card"><div class="label">Total chunks</div><div class="value blue">${kb.total_chunks.toLocaleString()}</div></div>`;
-    html += `<div class="stat-card"><div class="label">Collections</div><div class="value green">${kb.collections.length}</div></div>`;
+    const kbs = kb.kbs || {};
+    const kbCount = Object.keys(kbs).length;
+    html += `<div class="stat-card"><div class="label">Total Docs</div><div class="value blue">${(kb.total_docs || 0).toLocaleString()}</div></div>`;
+    html += `<div class="stat-card"><div class="label">Knowledge Bases</div><div class="value green">${kbCount}</div></div>`;
   } else {
     html += `<div class="stat-card"><div class="label">Knowledge Base</div><div class="value" style="color:var(--text-muted);font-size:1rem">Not connected</div></div>`;
   }
-  
+
   // Graph stats
   for (const [key, proj] of Object.entries(data.graphify_projects || {})) {
     html += `<div class="stat-card">
@@ -210,16 +212,17 @@ function renderStats(data) {
       <div style="font-size:0.75rem;color:var(--text-muted)">${proj.edges.toLocaleString()} edges · ${proj.communities} Communities</div>
     </div>`;
   }
-  
+
   document.getElementById('statsGrid').innerHTML = html || '<div class="stat-card"><div class="label">No data</div></div>';
-  
+
   // KB status
   const kbStatus = document.getElementById('kbStatus');
   if (kb.available) {
-    kbStatus.innerHTML = kb.collections.map(c => 
+    const kbs = kb.kbs || {};
+    kbStatus.innerHTML = Object.entries(kbs).map(([name, info]) =>
       `<div class="node-item">
-        <span style="font-weight:600">${c.name}</span>
-        <span class="meta">${c.count.toLocaleString()} chunks</span>
+        <span style="font-weight:600">${name}</span>
+        <span class="meta">${(info.docs || 0).toLocaleString()} docs · ${info.status}</span>
       </div>`
     ).join('');
   } else {

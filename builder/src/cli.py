@@ -691,7 +691,7 @@ def _llm_client(model_override: str = None, backend_override: str = None):
         else:
             raise RuntimeError("No LLM backend available. Set an API key env var.")
     model = model_override or BACKENDS[backend]["model"]
-    config = make_config(backend)
+    config = make_config(backend, model_override=model_override or "")
     config["model"] = model
     return backend, model, config
 
@@ -1248,7 +1248,11 @@ def _compile_document(backend, model: str, file_info: dict, kb_path: str) -> Opt
     word_count_est = len(text.split())
     if word_count_est > 300_000:
         print(f"     massive book ({word_count_est:,} words) → chaptered mode", flush=True)
-        result = _compile_document_chaptered(backend, model, file_info, kb_path)
+        result = _compile_document_chaptered(
+            backend, model, file_info, kb_path,
+            graph_context_fn=_build_graph_context,
+            stream_fn=_stream_message,
+        )
         if result is not None:
             return result
         # Fall through to single-pass if chaptered returned None
@@ -1521,6 +1525,9 @@ def _cmd_compile_llm_inner(args, kb_path: str):
 
     # Auxiliary model for simpler tasks (index, concepts)
     _MODEL_AUX = llm_config["aux_model"]
+    # Also override _MODEL_AUX if --model is passed directly
+    if args.model:
+        _MODEL_AUX = args.model
 
     print(f"📚  {config.get('name', 'Knowledge Base')}")
     print(f"🤖  Backend: {backend} / {model}")

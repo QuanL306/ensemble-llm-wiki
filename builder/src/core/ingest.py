@@ -6,6 +6,7 @@ Document ingestion module
 
 import os
 import sys
+from pathlib import Path
 from typing import Dict, List, Any, Optional, Tuple
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -174,16 +175,55 @@ class DataIngest:
     def process_all(self, incremental: bool = True) -> List[Dict]:
         """Process all new or changed files"""
         scan_result = self.scan(incremental=incremental)
-        
+
         to_process = scan_result["new"] + scan_result["changed"]
-        
+
         results = []
         for file_path in to_process:
             result = self.process_file(file_path)
             results.append(result)
-        
+
+        # Coverage check: ensure no files on disk are missing from the index
+        self._validate_coverage()
+
         return results
-    
+
+    def _is_supported(self, filename: str) -> bool:
+        """Check if a filename has a supported extension."""
+        return is_supported_format(filename)
+
+    def _validate_coverage(self) -> List[str]:
+        """Scan raw/ for files missing from file_index, add them."""
+        books_dir = os.path.join(self.kb_path, "raw", "books")
+        if not os.path.isdir(books_dir):
+            books_dir = self.raw_dir
+
+        # Get all supported files on disk
+        disk_files = set()
+        for f in os.listdir(books_dir):
+            if f.startswith('.'):
+                continue
+            full = os.path.join(books_dir, f)
+            if os.path.islink(full) or os.path.isfile(full):
+                if self._is_supported(f):
+                    disk_files.add(full)
+
+        # Get indexed files
+        indexed_paths = set()
+        for fid, finfo in self.indexer.index.get("files", {}).items():
+            if isinstance(finfo, dict):
+                indexed_paths.add(finfo.get("path", ""))
+
+        # Find missing
+        missing = [f for f in disk_files if f not in indexed_paths]
+        if missing:
+            print(f"[ingest] ⚠️ Coverage check: {len(missing)} files missing from index, auto-adding...")
+            for f in missing:
+                self.add_to_index(f)
+            self.indexer.save_index()
+            print(f"[ingest] ✅ Added {len(missing)} missing files to index")
+        return missing
+
     def get_stats(self) -> Dict[str, Any]:
         """Return ingest statistics"""
         scan_result = self.scan(incremental=True)

@@ -37,6 +37,35 @@ def _strip_code_fence(text: str) -> str:
         return m.group(1).strip()
     return text
 
+
+# ── Auto .env loading ────────────────────────────────────────────
+
+def _load_dotenv():
+    """Load ~/.hermes/.env and ./.env if present. Does not override existing env vars."""
+    for env_path in [
+        os.path.expanduser("~/.hermes/.env"),
+        os.path.join(os.getcwd(), ".env"),
+    ]:
+        if not os.path.isfile(env_path):
+            continue
+        try:
+            with open(env_path, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    if "=" not in line:
+                        continue
+                    key, _, val = line.partition("=")
+                    key = key.strip()
+                    val = val.strip().strip('"').strip("'")
+                    if key and key not in os.environ:
+                        os.environ[key] = val
+        except Exception:
+            pass
+
+_load_dotenv()  # Auto-load on import
+
 # ── Backend definitions ──────────────────────────────────────────
 
 BACKENDS: Dict[str, Dict[str, Any]] = {
@@ -143,9 +172,9 @@ def detect_backend() -> Optional[str]:
     return None
 
 
-def make_config(backend: str) -> Dict[str, str]:
+def make_config(backend: str, model_override: str = "") -> Dict[str, str]:
     """Return a {model, aux_model} config dict for a backend."""
-    model = BACKENDS[backend]["model"]
+    model = model_override or BACKENDS[backend]["model"]
     return {"model": model, "aux_model": model}
 
 

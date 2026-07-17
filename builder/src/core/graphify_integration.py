@@ -27,6 +27,10 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+# Add parent to path for utils import
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from utils.file_utils import write_text, save_json
+
 
 def find_graphify_python() -> str:
     """Find the Python interpreter with graphify installed"""
@@ -229,15 +233,11 @@ def split_edges(graph_file: Path, output_dir: Path):
 
     # Write citations.jsonl
     citations_file = output_dir / "citations.jsonl"
-    with open(citations_file, "w") as f:
-        for edge in citations:
-            f.write(json.dumps(edge, ensure_ascii=False) + "\n")
+    write_text(str(citations_file), "\n".join(json.dumps(e, ensure_ascii=False) for e in citations) + "\n" if citations else "")
 
     # Write edges.jsonl (semantic relationships)
     edges_file = output_dir / "edges.jsonl"
-    with open(edges_file, "w") as f:
-        for edge in semantic:
-            f.write(json.dumps(edge, ensure_ascii=False) + "\n")
+    write_text(str(edges_file), "\n".join(json.dumps(e, ensure_ascii=False) for e in semantic) + "\n" if semantic else "")
 
     print(
         f"✅ Dual edges: {len(citations)} citation + {len(semantic)} semantic "
@@ -348,28 +348,28 @@ def tag_edge_provenance(graph_file: Path, articles_dir: Path) -> dict:
     provenance_data = dict(data)
     provenance_data["links"] = tagged_links
     provenance_file = graph_file.parent / "graph_provenance.json"
-    with open(provenance_file, "w") as f:
-        json.dump(provenance_data, f, indent=2, ensure_ascii=False)
+    save_json(str(provenance_file), provenance_data)
 
     # Write edges_tagged.jsonl (tagged edges.jsonl counterpart)
     edges_tagged_file = graph_file.parent / "edges_tagged.jsonl"
     node_map = {n["id"]: n for n in nodes if "id" in n}
-    with open(edges_tagged_file, "w") as f:
-        for link in tagged_links:
-            src = link.get("source") or link.get("from", "")
-            tgt = link.get("target") or link.get("to", "")
-            row = {
-                "source": src,
-                "source_label": node_map[src]["label"] if src in node_map else src,
-                "target": tgt,
-                "target_label": node_map[tgt]["label"] if tgt in node_map else tgt,
-                "relation": link.get("relation", ""),
-                "confidence": link.get("confidence", ""),
-                "confidence_score": link.get("confidence_score", 0),
-                "source_file": link.get("source_file", ""),
-                "provenance": link["provenance"],
-            }
-            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    rows = []
+    for link in tagged_links:
+        src = link.get("source") or link.get("from", "")
+        tgt = link.get("target") or link.get("to", "")
+        row = {
+            "source": src,
+            "source_label": node_map[src]["label"] if src in node_map else src,
+            "target": tgt,
+            "target_label": node_map[tgt]["label"] if tgt in node_map else tgt,
+            "relation": link.get("relation", ""),
+            "confidence": link.get("confidence", ""),
+            "confidence_score": link.get("confidence_score", 0),
+            "source_file": link.get("source_file", ""),
+            "provenance": link["provenance"],
+        }
+        rows.append(row)
+    write_text(str(edges_tagged_file), "\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n" if rows else "")
 
     print(f"✅ Provenance: {provenance_file.name} + {edges_tagged_file.name}")
     return counts
